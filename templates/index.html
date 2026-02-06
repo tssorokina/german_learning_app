@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Verb-End Torture Chamber — Home{% endblock %}
+
+{% block content %}
+<div class="hero">
+    <h1>Verb-End<br><span class="accent">Torture Chamber</span></h1>
+    <p class="subtitle">Master German verb placement in subordinate clauses.<br>
+    From A2 to C1 — one Nebensatz at a time.</p>
+</div>
+
+<div class="level-grid">
+    <a href="/exercise?difficulty=1" class="level-card level-a2">
+        <div class="level-tag">A2</div>
+        <div class="level-name">Grundlagen</div>
+        <div class="level-desc">Simple subordinate clauses: dass, weil, wenn...</div>
+    </a>
+    <a href="/exercise?difficulty=2" class="level-card level-b1">
+        <div class="level-tag">B1</div>
+        <div class="level-name">Aufbau</div>
+        <div class="level-desc">Perfekt, modals, separable verbs, relative clauses</div>
+    </a>
+    <a href="/exercise?difficulty=3" class="level-card level-b2">
+        <div class="level-tag">B2</div>
+        <div class="level-name">Vertiefung</div>
+        <div class="level-desc">Nested clauses, passive, Konjunktiv</div>
+    </a>
+    <a href="/exercise?difficulty=4" class="level-card level-c1">
+        <div class="level-tag">C1</div>
+        <div class="level-name">Meisterklasse</div>
+        <div class="level-desc">Triple nesting, double infinitive, complex stacking</div>
+    </a>
+</div>
+
+{% if summary.total_attempts > 0 %}
+<div class="stats-bar">
+    <div class="stat">
+        <div class="stat-value">{{ summary.total_attempts }}</div>
+        <div class="stat-label">Versuche</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.accuracy }}%</div>
+        <div class="stat-label">Genauigkeit</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.current_streak }}</div>
+        <div class="stat-label">Serie</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.pending_retries }}</div>
+        <div class="stat-label">Wiederholung</div>
+    </div>
+</div>
+{% endif %}
+
+<div class="cta-section">
+    <a href="/exercise" class="btn btn-primary btn-lg">Start Random Exercise</a>
+    {% if summary.pending_retries > 0 %}
+    <a href="/exercise" class="btn btn-warning">{{ summary.pending_retries }} Retries Waiting</a>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,317 @@
+"""
+Verb-End Torture Chamber — Flask Web Application.
+
+A German grammar trainer focused on verb placement in subordinate/nested clauses.
+"""
+import os
+import json
+import secrets
+from datetime import date, datetime
+from functools import wraps
+
+from flask import (Flask, render_template, request, jsonify, session,
+                   redirect, url_for, abort)
+
+from database import (init_db, get_or_create_user, get_retry_template,
+                      mark_sentence_shown, record_attempt,
+                      log_error, schedule_retry, complete_retry, get_error_stats,
+                      get_recent_attempts, get_accuracy_over_time, get_user_summary,
+                      store_daily_message, get_daily_message, mark_daily_sent)
+from sentences import (get_exercise_by_difficulty, prepare_exercise,
+                       get_template_by_id, get_daily_sentence, SENTENCE_BANK,
+                       count_by_difficulty)
+from error_analyzer import (analyze_errors, get_error_explanation,
+                            get_all_categories, ERROR_CATEGORIES)
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+
+# Auth token for API / notification endpoints
+API_TOKEN = os.environ.get("API_TOKEN", secrets.token_hex(16))
+
+
+def get_user_token():
+    """Get or create a persistent user token in the session."""
+    if "user_token" not in session:
+        session["user_token"] = secrets.token_hex(8)
+        session.permanent = True
+    get_or_create_user(session["user_token"])
+    return session["user_token"]
+
+
+def require_api_token(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
+        if not token:
+            token = request.args.get("token", "")
+        if token != API_TOKEN:
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ─── INIT ──────────────────────────────────────────────────────────────
+@app.before_request
+def ensure_db():
+    init_db()
+
+
+# ─── WEB ROUTES ────────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    token = get_user_token()
+    summary = get_user_summary(token)
+    return render_template("index.html", summary=summary)
+
+
+@app.route("/exercise")
+def exercise_page():
+    token = get_user_token()
+    difficulty = request.args.get("difficulty", type=int)
+
+    # First check retry queue
+    retry = get_retry_template(token)
+    exercise = None
+    retry_id = None
+
+    if retry and not request.args.get("skip_retry"):
+        template = get_template_by_id(retry.get("template_id", ""))
+        if template:
+            exercise = prepare_exercise(template)
+            retry_id = retry.get("retry_id")
+
+    if not exercise:
+        # Get list of shown template IDs for this user
+        exercise = get_exercise_by_difficulty(difficulty)
+
+    if not exercise:
+        return render_template("no_exercises.html")
+
+    mark_sentence_shown(token, exercise["template_id"])
+
+    return render_template("exercise.html",
+                           exercise=json.dumps(exercise),
+                           retry_id=retry_id,
+                           difficulty_label=_diff_label(exercise["difficulty"]))
+
+
+@app.route("/dashboard")
+def dashboard():
+    token = get_user_token()
+    error_stats = get_error_stats(token)
+    recent = get_recent_attempts(token, limit=30)
+    accuracy = get_accuracy_over_time(token, days=30)
+    summary = get_user_summary(token)
+    categories = get_all_categories()
+
+    # Enrich error stats with category info
+    for stat in error_stats:
+        cat_info = categories.get(stat["error_category"], {})
+        stat["name"] = cat_info.get("name_en", stat["error_category"])
+        stat["tip"] = cat_info.get("tip", "")
+
+    # Enrich recent attempts with sentence info from the bank
+    for r in recent:
+        tmpl = get_template_by_id(r.get("template_id", ""))
+        r["full_text"] = tmpl["text"] if tmpl else r.get("template_id", "?")
+        r["clause_structure"] = tmpl["clause_type"] if tmpl else ""
+
+    return render_template("dashboard.html",
+                           error_stats=error_stats,
+                           recent=recent,
+                           accuracy=json.dumps(accuracy),
+                           summary=summary)
+
+
+# ─── API ROUTES ────────────────────────────────────────────────────────
+
+@app.route("/api/exercise", methods=["GET"])
+def api_get_exercise():
+    token = get_user_token()
+    difficulty = request.args.get("difficulty", type=int)
+    exercise = get_exercise_by_difficulty(difficulty)
+    if not exercise:
+        return jsonify({"error": "no exercises available"}), 404
+    mark_sentence_shown(token, exercise["template_id"])
+    # Don't send the full answer to the frontend
+    safe = {
+        "template_id": exercise["template_id"],
+        "display_text": exercise["display_text"],
+        "words": exercise["words"],
+        "verbs": exercise["verbs"],
+        "slots": [{"index": s["index"], "suffix": s["suffix"]} for s in exercise["slots"]],
+        "difficulty": exercise["difficulty"],
+        "clause_type": exercise["clause_type"],
+        "num_slots": len(exercise["slots"])
+    }
+    return jsonify(safe)
+
+
+@app.route("/api/check", methods=["POST"])
+def api_check_answer():
+    token = get_user_token()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "no data"}), 400
+
+    template_id = data.get("template_id")
+    user_positions = data.get("positions", [])
+    retry_id = data.get("retry_id")
+
+    template = get_template_by_id(template_id)
+    if not template:
+        return jsonify({"error": "unknown sentence"}), 404
+
+    exercise = prepare_exercise(template)
+
+    # Check correctness
+    errors = analyze_errors(exercise, user_positions)
+    correct = len(errors) == 0
+
+    # Record attempt
+    record_attempt(token, template_id, user_positions, correct,
+                   errors if errors else None)
+
+    # If retry exercise completed correctly, mark it
+    if correct and retry_id:
+        complete_retry(retry_id)
+
+    # Log errors and schedule retries
+    explanations = []
+    if errors:
+        for err in errors:
+            error_id = log_error(token, template_id, err["category"], err["detail"])
+            schedule_retry(token, template_id, error_id, days_delay=2)
+            explanations.append(get_error_explanation(err))
+
+    return jsonify({
+        "correct": correct,
+        "full_sentence": exercise["full_text"],
+        "explanation": exercise["explanation"],
+        "errors": explanations,
+        "slots": exercise["slots"]
+    })
+
+
+@app.route("/api/stats", methods=["GET"])
+def api_stats():
+    token = get_user_token()
+    return jsonify({
+        "summary": get_user_summary(token),
+        "error_categories": get_error_stats(token),
+        "accuracy_over_time": get_accuracy_over_time(token)
+    })
+
+
+# ─── DAILY MESSAGE / NOTIFICATION API ──────────────────────────────────
+
+@app.route("/api/daily", methods=["GET"])
+def api_daily_message():
+    """Public endpoint for daily sentence — used by Shortcuts/automation."""
+    today = date.today().isoformat()
+    msg = get_daily_message(today)
+    if not msg:
+        template = get_daily_sentence()
+        sentence_text = template["text"]
+        store_daily_message(today, sentence_text)
+        msg = {"sentence_text": sentence_text, "message_date": today}
+
+    base_url = os.environ.get("BASE_URL", request.host_url.rstrip("/"))
+    return jsonify({
+        "date": msg["message_date"] if isinstance(msg, dict) else today,
+        "sentence": msg["sentence_text"] if isinstance(msg, dict) else msg,
+        "exercise_url": f"{base_url}/exercise",
+        "message": f"🇩🇪 Verb-End Torture Chamber\n\nHeute: {msg['sentence_text'] if isinstance(msg, dict) else msg}\n\nKannst du das Verb richtig platzieren?\n{base_url}/exercise"
+    })
+
+
+@app.route("/api/daily/send", methods=["POST"])
+@require_api_token
+def api_trigger_daily():
+    """Trigger endpoint for cron job to prepare daily message."""
+    today = date.today().isoformat()
+    msg = get_daily_message(today)
+    if not msg:
+        template = get_daily_sentence()
+        store_daily_message(today, template["text"])
+        msg = get_daily_message(today)
+    mark_daily_sent(today)
+    base_url = os.environ.get("BASE_URL", request.host_url.rstrip("/"))
+    return jsonify({
+        "status": "sent",
+        "message": msg["sentence_text"] if isinstance(msg, dict) else str(msg),
+        "url": f"{base_url}/exercise"
+    })
+
+
+# ─── MCP ENDPOINTS ────────────────────────────────────────────────────
+
+@app.route("/api/mcp/exercise", methods=["GET"])
+@require_api_token
+def mcp_get_exercise():
+    difficulty = request.args.get("difficulty", type=int)
+    exercise = get_exercise_by_difficulty(difficulty)
+    if not exercise:
+        return jsonify({"error": "no exercises"}), 404
+    return jsonify(exercise)
+
+
+@app.route("/api/mcp/check", methods=["POST"])
+@require_api_token
+def mcp_check():
+    data = request.get_json()
+    template_id = data.get("template_id")
+    user_positions = data.get("positions", [])
+
+    template = get_template_by_id(template_id)
+    if not template:
+        return jsonify({"error": "unknown sentence"}), 404
+
+    exercise = prepare_exercise(template)
+    errors = analyze_errors(exercise, user_positions)
+    explanations = [get_error_explanation(e) for e in errors]
+
+    return jsonify({
+        "correct": len(errors) == 0,
+        "full_sentence": exercise["full_text"],
+        "explanation": exercise["explanation"],
+        "errors": explanations
+    })
+
+
+@app.route("/api/mcp/stats", methods=["GET"])
+@require_api_token
+def mcp_stats():
+    token = request.args.get("user_token", "")
+    if not token:
+        return jsonify({"error": "user_token required"}), 400
+    return jsonify({
+        "summary": get_user_summary(token),
+        "error_categories": get_error_stats(token)
+    })
+
+
+@app.route("/api/mcp/sentence-bank/info", methods=["GET"])
+@require_api_token
+def mcp_sentence_info():
+    return jsonify({
+        "total_sentences": len(SENTENCE_BANK),
+        "by_difficulty": count_by_difficulty(),
+        "clause_types": list(set(t["clause_type"] for t in SENTENCE_BANK))
+    })
+
+
+# ─── HELPERS ───────────────────────────────────────────────────────────
+
+def _diff_label(d):
+    return {1: "A2", 2: "B1", 3: "B2", 4: "C1"}.get(d, "?")
+
+
+# ─── MAIN ──────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    init_db()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=os.environ.get("DEBUG", "0") == "1")

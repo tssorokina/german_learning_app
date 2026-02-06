@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: verb-end-torture-chamber
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: API_TOKEN
+        generateValue: true
+      - key: BASE_URL
+        value: https://verb-end-torture-chamber.onrender.com
+      - key: DB_PATH
+        value: /opt/render/project/src/german_app.db
+    healthCheckPath: /
+    autoDeploy: true
+
+  # Optional: cron job for daily notifications
+  # Uncomment after deploying the web service and setting BASE_URL
+  # - type: cron
+  #   name: daily-notification
+  #   runtime: python
+  #   schedule: "0 6 * * *"  # 6 AM UTC daily
+  #   buildCommand: pip install requests
+  #   startCommand: |
+  #     python -c "
+  #     import requests, os
+  #     url = os.environ['BASE_URL'] + '/api/daily/send'
+  #     token = os.environ['API_TOKEN']
+  #     r = requests.post(url, headers={'Authorization': f'Bearer {token}'})
+  #     print(r.json())
+  #     "
+  #   envVars:
+  #     - key: BASE_URL
+  #       fromService:
+  #         name: verb-end-torture-chamber
+  #         type: web
+  #         envVarKey: BASE_URL
+  #     - key: API_TOKEN
+  #       fromService:
+  #         name: verb-end-torture-chamber
+  #         type: web
+  #         envVarKey: API_TOKEN

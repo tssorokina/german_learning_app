@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Verb-End Torture Chamber{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Dashboard</h1>
+
+<div class="stats-bar">
+    <div class="stat">
+        <div class="stat-value">{{ summary.total_attempts }}</div>
+        <div class="stat-label">Total Attempts</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.accuracy }}%</div>
+        <div class="stat-label">Accuracy</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.current_streak }}</div>
+        <div class="stat-label">Current Streak</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.pending_retries }}</div>
+        <div class="stat-label">Pending Retries</div>
+    </div>
+</div>
+
+{% if error_stats %}
+<section class="dashboard-section">
+    <h2>Most Frequent Error Categories</h2>
+    <div class="error-chart">
+        {% for stat in error_stats %}
+        <div class="error-bar-row">
+            <div class="error-bar-label">{{ stat.name }}</div>
+            <div class="error-bar-track">
+                <div class="error-bar-fill" style="width: {{ (stat.count / error_stats[0].count * 100)|int }}%">
+                    {{ stat.count }}
+                </div>
+            </div>
+            <div class="error-bar-tip">{{ stat.tip }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<section class="dashboard-section">
+    <h2>Accuracy Over Time</h2>
+    <div id="accuracy-chart" class="chart-container">
+        <canvas id="accuracy-canvas"></canvas>
+    </div>
+</section>
+
+{% if recent %}
+<section class="dashboard-section">
+    <h2>Recent Attempts</h2>
+    <div class="attempts-list">
+        {% for r in recent %}
+        <div class="attempt-row {{ 'correct' if r.correct else 'incorrect' }}">
+            <span class="attempt-icon">{{ '✓' if r.correct else '✗' }}</span>
+            <span class="attempt-text">{{ r.full_text[:60] }}{% if r.full_text|length > 60 %}...{% endif %}</span>
+            <span class="attempt-type">{{ r.clause_structure }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if not error_stats and summary.total_attempts == 0 %}
+<div class="empty-state">
+    <p>No data yet. Complete some exercises to see your progress!</p>
+    <a href="/exercise" class="btn btn-primary">Start Exercising</a>
+</div>
+{% endif %}
+
+<script>
+const ACCURACY_DATA = {{ accuracy|safe }};
+
+function drawChart() {
+    const canvas = document.getElementById('accuracy-canvas');
+    if (!canvas || !ACCURACY_DATA || ACCURACY_DATA.length === 0) return;
+
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = 200;
+
+    const padding = { top: 20, right: 20, bottom: 40, left: 50 };
+    const w = canvas.width - padding.left - padding.right;
+    const h = canvas.height - padding.top - padding.bottom;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const data = ACCURACY_DATA.map(d => ({
+        day: d.day,
+        pct: d.total > 0 ? Math.round(d.correct_count / d.total * 100) : 0
+    }));
+
+    const xStep = data.length > 1 ? w / (data.length - 1) : w / 2;
+
+    // Grid
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+        const y = padding.top + h - (h * i / 4);
+        ctx.beginPath();
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(padding.left + w, y);
+        ctx.stroke();
+        ctx.fillStyle = '#888';
+        ctx.font = '11px monospace';
+        ctx.fillText((i * 25) + '%', 5, y + 4);
+    }
+
+    // Line
+    ctx.strokeStyle = '#4ade80';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    data.forEach((d, i) => {
+        const x = padding.left + i * xStep;
+        const y = padding.top + h - (h * d.pct / 100);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Dots
+    data.forEach((d, i) => {
+        const x = padding.left + i * xStep;
+        const y = padding.top + h - (h * d.pct / 100);
+        ctx.fillStyle = '#4ade80';
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // X labels
+    ctx.fillStyle = '#888';
+    ctx.font = '10px monospace';
+    data.forEach((d, i) => {
+        if (data.length <= 10 || i % Math.ceil(data.length / 7) === 0) {
+            const x = padding.left + i * xStep;
+            ctx.fillText(d.day.slice(5), x - 15, canvas.height - 5);
+        }
+    });
+}
+
+drawChart();
+window.addEventListener('resize', drawChart);
+</script>
+{% endblock %}

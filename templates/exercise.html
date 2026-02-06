@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Exercise — Verb-End Torture Chamber{% endblock %}
+
+{% block content %}
+<div class="exercise-container">
+    <div class="exercise-header">
+        <span class="difficulty-badge">{{ difficulty_label }}</span>
+        <span id="clause-type" class="clause-badge"></span>
+    </div>
+
+    <div class="instruction">
+        <p>Drag the verb(s) into the correct position(s) in the sentence.</p>
+    </div>
+
+    <div id="sentence-area" class="sentence-area">
+        <!-- Words and slots rendered by JS -->
+    </div>
+
+    <div id="verb-pool" class="verb-pool">
+        <div class="verb-pool-label">Verben:</div>
+        <div id="verb-tray" class="verb-tray">
+            <!-- Draggable verbs rendered by JS -->
+        </div>
+    </div>
+
+    <div class="action-bar">
+        <button id="btn-check" class="btn btn-primary" disabled>Prüfen</button>
+        <button id="btn-reset" class="btn btn-secondary">Reset</button>
+    </div>
+
+    <div id="result-area" class="result-area hidden">
+        <div id="result-icon" class="result-icon"></div>
+        <div id="result-message" class="result-message"></div>
+        <div id="correct-sentence" class="correct-sentence"></div>
+        <div id="explanation-box" class="explanation-box"></div>
+        <div id="error-details" class="error-details"></div>
+        <div class="action-bar">
+            <a href="/exercise?difficulty={{ difficulty_label|replace('A2','1')|replace('B1','2')|replace('B2','3')|replace('C1','4') }}" class="btn btn-primary">Next Exercise</a>
+            <a href="/" class="btn btn-secondary">Home</a>
+        </div>
+    </div>
+</div>
+
+<script>
+    const EXERCISE_DATA = {{ exercise|safe }};
+    const RETRY_ID = {{ retry_id|tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% endblock %}
