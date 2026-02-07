@@ -72,7 +72,7 @@ body {
 
 /* ─── CONTAINER ───────────────────────────────── */
 .container {
-    max-width: 640px;
+    max-width: 700px;
     margin: 0 auto;
     padding: 20px 16px 80px;
 }
@@ -191,7 +191,9 @@ body {
 .btn-primary:hover { opacity: 0.9; }
 .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 .btn-warning { background: #78350f; color: var(--warning); border: 1px solid var(--warning); }
+.btn-danger { background: rgba(248, 113, 113, 0.15); color: var(--error); border: 1px solid rgba(248, 113, 113, 0.3); }
 .btn-lg { padding: 16px 32px; font-size: 1.05rem; }
+.btn-sm { padding: 8px 14px; font-size: 0.8rem; }
 
 /* ─── EXERCISE PAGE ───────────────────────────── */
 .exercise-container { padding-top: 8px; }
@@ -215,8 +217,14 @@ body {
     font-size: 0.9rem;
     margin-bottom: 20px;
 }
+.instruction-hint {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-top: 4px;
+    opacity: 0.7;
+}
 
-/* ─── SENTENCE AREA ───────────────────────────── */
+/* ─── SENTENCE AREA (Full Sentence Mode) ─────── */
 .sentence-area {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -225,11 +233,25 @@ body {
     min-height: 80px;
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 5px;
+    gap: 4px 3px;
     align-items: center;
-    line-height: 2.2;
+    line-height: 2.4;
     font-size: 1.05rem;
     margin-bottom: 20px;
+}
+
+.slot-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+}
+
+.slot-punct {
+    font-size: 1.05rem;
+    color: var(--text);
+    margin-right: 2px;
+    pointer-events: none;
+    user-select: none;
 }
 
 .word-token {
@@ -240,12 +262,13 @@ body {
 .slot {
     display: inline-flex;
     align-items: center;
-    min-width: 80px;
+    justify-content: center;
+    min-width: 60px;
     min-height: 36px;
     padding: 4px 8px;
-    border: 2px dashed var(--accent);
+    border: 2px dashed var(--border);
     border-radius: var(--radius-sm);
-    background: var(--accent-glow);
+    background: var(--surface2);
     transition: border-color 0.2s, background 0.2s;
     cursor: pointer;
     position: relative;
@@ -257,25 +280,52 @@ body {
 .slot.filled {
     border-style: solid;
     border-color: var(--accent);
-    background: rgba(99, 102, 241, 0.2);
+    background: rgba(99, 102, 241, 0.15);
 }
-.slot .placed-verb {
+.slot .placed-word {
     font-weight: 600;
     color: var(--accent);
+    white-space: nowrap;
 }
 .slot.correct-slot {
     border-color: var(--success);
     background: rgba(74, 222, 128, 0.15);
 }
+.slot.correct-slot .placed-word {
+    color: var(--success);
+}
 .slot.incorrect-slot {
     border-color: var(--error);
     background: rgba(248, 113, 113, 0.15);
 }
+.slot.incorrect-slot .placed-word {
+    color: var(--error);
+}
 
-/* ─── VERB POOL ───────────────────────────────── */
-.verb-pool {
+/* ─── WORD POOL ──────────────────────────────── */
+.word-pool {
     margin-bottom: 20px;
 }
+.word-pool-label {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+}
+.word-tray {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 44px;
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+/* Legacy alias */
+.verb-pool { margin-bottom: 20px; }
 .verb-pool-label {
     font-size: 0.8rem;
     color: var(--text-dim);
@@ -294,7 +344,7 @@ body {
     border-radius: var(--radius);
 }
 
-.verb-chip {
+.word-chip, .verb-chip {
     display: inline-flex;
     align-items: center;
     padding: 8px 16px;
@@ -309,12 +359,12 @@ body {
     touch-action: none;
     transition: transform 0.1s, opacity 0.15s;
 }
-.verb-chip:active { cursor: grabbing; }
-.verb-chip.dragging {
+.word-chip:active, .verb-chip:active { cursor: grabbing; }
+.word-chip.dragging, .verb-chip.dragging {
     opacity: 0.5;
     transform: scale(0.95);
 }
-.verb-chip.placed {
+.word-chip.placed, .verb-chip.placed {
     opacity: 0.3;
     pointer-events: none;
 }
@@ -394,6 +444,97 @@ body {
     color: var(--text);
     font-style: italic;
     margin-top: 4px;
+}
+
+/* ─── DUDEN POPUP ─────────────────────────────── */
+.duden-popup {
+    position: fixed;
+    z-index: 2000;
+    width: 320px;
+    max-height: 400px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.duden-popup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    font-size: 1rem;
+    color: var(--accent);
+}
+
+.duden-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 1.4rem;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+}
+.duden-close-btn:hover { color: var(--text); }
+
+.duden-popup-body {
+    padding: 12px 16px;
+    overflow-y: auto;
+    flex: 1;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text);
+}
+
+.duden-loading {
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+.duden-wordtype {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.duden-def {
+    margin-bottom: 8px;
+}
+
+.duden-examples {
+    margin-top: 8px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+.duden-examples ul {
+    margin: 4px 0;
+    padding-left: 18px;
+}
+.duden-examples li {
+    margin-bottom: 3px;
+}
+
+.duden-popup-actions {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface2);
+}
+.duden-popup-actions .btn {
+    flex: 1;
+    text-align: center;
+}
+.duden-link-btn {
+    font-size: 0.8rem;
 }
 
 /* ─── DASHBOARD ───────────────────────────────── */
@@ -478,6 +619,100 @@ body {
     white-space: nowrap;
 }
 
+/* ─── SAVED WORDS TABLE ──────────────────────── */
+.saved-words-section {
+    margin: 28px 0;
+}
+
+.saved-words-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.saved-words-header h2 {
+    margin-bottom: 0;
+}
+
+.export-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.saved-words-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+.saved-words-table th,
+.saved-words-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+.saved-words-table th {
+    background: var(--surface2);
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.saved-words-table td {
+    background: var(--surface);
+    color: var(--text);
+    vertical-align: top;
+}
+.saved-words-table tr:hover td {
+    background: var(--surface2);
+}
+
+.word-cell {
+    font-weight: 600;
+    color: var(--accent);
+    white-space: nowrap;
+}
+.def-cell {
+    max-width: 300px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    line-height: 1.4;
+}
+.delete-word-btn {
+    background: none;
+    border: none;
+    color: var(--error);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 4px;
+    opacity: 0.6;
+}
+.delete-word-btn:hover {
+    opacity: 1;
+}
+
+.saved-words-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 0.9rem;
+}
+
+.word-count-badge {
+    font-size: 0.75rem;
+    background: var(--accent);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 8px;
+}
+
 /* ─── EMPTY STATE ─────────────────────────────── */
 .empty-state {
     text-align: center;
@@ -493,8 +728,8 @@ body {
 
 /* ─── TOUCH FEEDBACK ──────────────────────────── */
 @media (hover: none) {
-    .verb-chip { padding: 10px 20px; font-size: 1rem; }
-    .slot { min-height: 42px; min-width: 90px; }
+    .word-chip, .verb-chip { padding: 10px 20px; font-size: 1rem; }
+    .slot { min-height: 42px; min-width: 70px; }
 }
 
 /* ─── DRAG GHOST (for touch) ──────────────────── */
@@ -510,4 +745,22 @@ body {
     border-radius: var(--radius-sm);
     box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     transform: translate(-50%, -50%);
+}
+
+/* ─── RESPONSIVE TABLE ────────────────────────── */
+.table-wrapper {
+    overflow-x: auto;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+@media (max-width: 500px) {
+    .saved-words-table th:nth-child(3),
+    .saved-words-table td:nth-child(3) {
+        display: none;
+    }
+    .duden-popup {
+        width: calc(100vw - 20px);
+        left: 10px !important;
+    }
 }

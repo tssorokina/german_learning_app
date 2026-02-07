@@ -66,6 +66,17 @@ def init_db():
             sent INTEGER DEFAULT 0,
             sent_at TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS saved_words (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            word TEXT NOT NULL,
+            definition TEXT,
+            examples TEXT,
+            source_sentence TEXT,
+            saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_token, word)
+        );
     """)
     conn.commit()
     conn.close()
@@ -262,6 +273,40 @@ def mark_daily_sent(message_date):
     conn.execute(
         "UPDATE daily_messages SET sent = 1, sent_at = ? WHERE message_date = ?",
         (datetime.now().isoformat(), message_date)
+    )
+    conn.commit()
+    conn.close()
+
+
+# ─── SAVED WORDS ──────────────────────────────────────────────────────
+
+def save_word(user_token, word, definition=None, examples=None, source_sentence=None):
+    conn = get_db()
+    conn.execute(
+        """INSERT OR REPLACE INTO saved_words
+           (user_token, word, definition, examples, source_sentence, saved_at)
+           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+        (user_token, word, definition, examples, source_sentence)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_saved_words(user_token):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM saved_words WHERE user_token = ? ORDER BY saved_at DESC",
+        (user_token,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_saved_word(user_token, word_id):
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM saved_words WHERE id = ? AND user_token = ?",
+        (word_id, user_token)
     )
     conn.commit()
     conn.close()

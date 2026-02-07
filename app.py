@@ -16,7 +16,8 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       mark_sentence_shown, record_attempt,
                       log_error, schedule_retry, complete_retry, get_error_stats,
                       get_recent_attempts, get_accuracy_over_time, get_user_summary,
-                      store_daily_message, get_daily_message, mark_daily_sent)
+                      store_daily_message, get_daily_message, mark_daily_sent,
+                      save_word, get_saved_words, delete_saved_word)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
                        count_by_difficulty)
@@ -91,8 +92,19 @@ def exercise_page():
 
     mark_sentence_shown(token, exercise["template_id"])
 
+    # Build safe exercise data for the frontend (don't leak correct answers)
+    safe_exercise = {
+        "template_id": exercise["template_id"],
+        "num_slots": len(exercise["all_slots"]),
+        "slot_suffixes": [s["suffix"] for s in exercise["all_slots"]],
+        "verb_indices": exercise["verb_positions"],
+        "shuffled_words": exercise["shuffled_words"],
+        "clause_type": exercise["clause_type"],
+        "difficulty": exercise["difficulty"],
+    }
+
     return render_template("exercise.html",
-                           exercise=json.dumps(exercise),
+                           exercise=json.dumps(safe_exercise),
                            retry_id=retry_id,
                            difficulty_label=_diff_label(exercise["difficulty"]))
 
@@ -105,6 +117,7 @@ def dashboard():
     accuracy = get_accuracy_over_time(token, days=30)
     summary = get_user_summary(token)
     categories = get_all_categories()
+    saved_words = get_saved_words(token)
 
     # Enrich error stats with category info
     for stat in error_stats:
@@ -122,7 +135,8 @@ def dashboard():
                            error_stats=error_stats,
                            recent=recent,
                            accuracy=json.dumps(accuracy),
-                           summary=summary)
+                           summary=summary,
+                           saved_words=saved_words)
 
 
 # ─── API ROUTES ────────────────────────────────────────────────────────
@@ -157,7 +171,7 @@ def api_check_answer():
         return jsonify({"error": "no data"}), 400
 
     template_id = data.get("template_id")
-    user_positions = data.get("positions", [])
+    user_positions = data.get("positions", [])  # [{slot_index, word}, ...]
     retry_id = data.get("retry_id")
 
     template = get_template_by_id(template_id)
@@ -166,16 +180,53 @@ def api_check_answer():
 
     exercise = prepare_exercise(template)
 
-    # Check correctness
-    errors = analyze_errors(exercise, user_positions)
-    correct = len(errors) == 0
+    # Full sentence check: compare every word position
+    all_slots = exercise["all_slots"]
+    slot_results = []
+    all_correct = True
+    for slot in all_slots:
+        idx = slot["index"]
+        user_word = None
+        for up in user_positions:
+            if up["slot_index"] == idx:
+                user_word = up["word"]
+                break
+        is_correct = (user_word == slot["correct_word"])
+        if not is_correct:
+            all_correct = False
+        slot_results.append({
+            "index": idx,
+            "correct_word": slot["correct_word"],
+            "user_word": user_word,
+            "is_correct": is_correct,
+            "is_verb": slot["is_verb"],
+            "suffix": slot["suffix"]
+        })
+
+    # Extract verb-only positions for error analysis
+    verb_user_positions = []
+    verb_slot_idx = 0
+    for slot in exercise["verb_slots"]:
+        word_idx = slot["index"]
+        user_word = None
+        for up in user_positions:
+            if up["slot_index"] == word_idx:
+                user_word = up["word"]
+                break
+        verb_user_positions.append({
+            "slot_index": verb_slot_idx,
+            "verb": user_word or ""
+        })
+        verb_slot_idx += 1
+
+    errors = analyze_errors(exercise, verb_user_positions)
 
     # Record attempt
-    record_attempt(token, template_id, user_positions, correct,
+    record_attempt(token, template_id, user_positions, all_correct,
                    errors if errors else None)
 
     # If retry exercise completed correctly, mark it
-    if correct and retry_id:
+    if all_correct and retry_id:
         complete_retry(retry_id)
 
     # Log errors and schedule retries
@@ -187,11 +238,11 @@ def api_check_answer():
             explanations.append(get_error_explanation(err))
 
     return jsonify({
-        "correct": correct,
+        "correct": all_correct,
         "full_sentence": exercise["full_text"],
         "explanation": exercise["explanation"],
         "errors": explanations,
-        "slots": exercise["slots"]
+        "slot_results": slot_results
     })
 
 
@@ -203,6 +254,182 @@ def api_stats():
         "error_categories": get_error_stats(token),
         "accuracy_over_time": get_accuracy_over_time(token)
     })
+
+
+# ─── DUDEN LOOKUP ─────────────────────────────────────────────────────
+
+@app.route("/api/duden/<word>", methods=["GET"])
+def api_duden_lookup(word):
+    """Proxy lookup for Duden dictionary definitions (German only)."""
+    import requests
+    from bs4 import BeautifulSoup
+
+    word_clean = word.strip().lower()
+    url = f"https://www.duden.de/rechtschreibung/{word_clean}"
+    definition = ""
+    examples = []
+    word_type = ""
+
+    try:
+        resp = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; GermanLearningApp/1.0)"
+        }, timeout=5)
+
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Extract word type (Wortart)
+            wortart = soup.select_one('[class*="Wortart"]')
+            if not wortart:
+                wortart = soup.select_one('.tuple__val')
+            if wortart:
+                word_type = wortart.get_text(strip=True)
+
+            # Extract definitions (Bedeutungen)
+            meanings = soup.select('[id*="bedeutung"] li, [class*="bedeutung"] li, .enumeration__text')
+            if meanings:
+                definition = "; ".join(
+                    m.get_text(strip=True) for m in meanings[:3]
+                )
+            if not definition:
+                # Fallback: try the first text block under Bedeutung
+                bed_section = soup.select_one('[id*="bedeutung"]')
+                if bed_section:
+                    definition = bed_section.get_text(strip=True)[:300]
+
+            # Extract examples (Beispiele)
+            example_els = soup.select('[class*="note__list"] li, .beispiel, [class*="Beispiel"] li')
+            for ex in example_els[:3]:
+                examples.append(ex.get_text(strip=True))
+
+        if not definition:
+            # Try alternate URL format
+            resp2 = requests.get(
+                f"https://www.duden.de/suchen/dudenonline/{word_clean}",
+                headers={"User-Agent": "Mozilla/5.0 (compatible; GermanLearningApp/1.0)"},
+                timeout=5
+            )
+            if resp2.status_code == 200:
+                soup2 = BeautifulSoup(resp2.text, "html.parser")
+                first_result = soup2.select_one('.vignette__link')
+                if first_result and first_result.get('href'):
+                    result_url = "https://www.duden.de" + first_result['href']
+                    resp3 = requests.get(result_url, headers={
+                        "User-Agent": "Mozilla/5.0 (compatible; GermanLearningApp/1.0)"
+                    }, timeout=5)
+                    if resp3.status_code == 200:
+                        soup3 = BeautifulSoup(resp3.text, "html.parser")
+                        meanings3 = soup3.select('[id*="bedeutung"] li, .enumeration__text')
+                        if meanings3:
+                            definition = "; ".join(
+                                m.get_text(strip=True) for m in meanings3[:3]
+                            )
+                        example_els3 = soup3.select('[class*="note__list"] li, .beispiel')
+                        for ex in example_els3[:3]:
+                            examples.append(ex.get_text(strip=True))
+
+    except Exception:
+        pass
+
+    if not definition:
+        definition = f"Keine Definition gefunden. Bitte suchen Sie auf duden.de nach '{word_clean}'."
+
+    return jsonify({
+        "word": word_clean,
+        "word_type": word_type,
+        "definition": definition,
+        "examples": examples,
+        "duden_url": f"https://www.duden.de/rechtschreibung/{word_clean}"
+    })
+
+
+# ─── SAVED WORDS ──────────────────────────────────────────────────────
+
+@app.route("/api/words", methods=["GET"])
+def api_get_saved_words():
+    token = get_user_token()
+    words = get_saved_words(token)
+    return jsonify({"words": words})
+
+
+@app.route("/api/words", methods=["POST"])
+def api_save_word():
+    token = get_user_token()
+    data = request.get_json()
+    if not data or not data.get("word"):
+        return jsonify({"error": "word required"}), 400
+    save_word(
+        token,
+        data["word"],
+        definition=data.get("definition"),
+        examples=data.get("examples"),
+        source_sentence=data.get("source_sentence")
+    )
+    return jsonify({"status": "saved"})
+
+
+@app.route("/api/words/<int:word_id>", methods=["DELETE"])
+def api_delete_word(word_id):
+    token = get_user_token()
+    delete_saved_word(token, word_id)
+    return jsonify({"status": "deleted"})
+
+
+@app.route("/api/words/export/anki", methods=["GET"])
+def api_export_anki():
+    """Export saved words as Anki-compatible TSV."""
+    token = get_user_token()
+    words = get_saved_words(token)
+    if not words:
+        return jsonify({"error": "no words saved"}), 404
+
+    lines = []
+    for w in words:
+        front = w["word"]
+        examples = w.get("examples") or ""
+        definition = w.get("definition") or ""
+        back = definition
+        if examples:
+            back += "<br><br><b>Beispiele:</b><br>" + examples.replace("\n", "<br>")
+        if w.get("source_sentence"):
+            back += "<br><br><i>" + w["source_sentence"] + "</i>"
+        # TSV: front \t back
+        lines.append(f"{front}\t{back}")
+
+    content = "\n".join(lines)
+    from flask import Response
+    return Response(
+        content,
+        mimetype="text/tab-separated-values",
+        headers={"Content-Disposition": "attachment; filename=german_words_anki.tsv"}
+    )
+
+
+@app.route("/api/words/export/quizlet", methods=["GET"])
+def api_export_quizlet():
+    """Export saved words as Quizlet-compatible text (tab-separated, newline between cards)."""
+    token = get_user_token()
+    words = get_saved_words(token)
+    if not words:
+        return jsonify({"error": "no words saved"}), 404
+
+    lines = []
+    for w in words:
+        front = w["word"]
+        definition = w.get("definition") or ""
+        examples = w.get("examples") or ""
+        back = definition
+        if examples:
+            back += " | Beispiele: " + examples.replace("\n", " | ")
+        lines.append(f"{front}\t{back}")
+
+    content = "\n".join(lines)
+    from flask import Response
+    return Response(
+        content,
+        mimetype="text/plain",
+        headers={"Content-Disposition": "attachment; filename=german_words_quizlet.txt"}
+    )
 
 
 # ─── DAILY MESSAGE / NOTIFICATION API ──────────────────────────────────
