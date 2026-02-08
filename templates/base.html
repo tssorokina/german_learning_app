@@ -5,15 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>{% block title %}Verb-End Torture Chamber{% endblock %}</title>
+    <title>{% block title %}Grammar Torture Chamber{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
     <nav class="navbar">
-        <a href="/" class="nav-brand">🇩🇪 Verb-End</a>
+        <a href="/" class="nav-brand">&#x1f1e9;&#x1f1ea; Grammatik</a>
         <div class="nav-links">
-            <a href="/exercise" class="nav-link">Üben</a>
+            <a href="/exercise" class="nav-link">&Uuml;ben</a>
+            <a href="/grammar" class="nav-link">Module</a>
             <a href="/dashboard" class="nav-link">Dashboard</a>
         </div>
     </nav>

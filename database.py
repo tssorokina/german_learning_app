@@ -77,7 +77,29 @@ def init_db():
             saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_token, word)
         );
+
+        CREATE TABLE IF NOT EXISTS grammar_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            module TEXT NOT NULL,
+            rule_id TEXT NOT NULL,
+            times_tested INTEGER DEFAULT 0,
+            times_correct INTEGER DEFAULT 0,
+            ease_factor REAL DEFAULT 2.5,
+            interval_days REAL DEFAULT 1,
+            last_tested TIMESTAMP,
+            next_review TIMESTAMP,
+            UNIQUE(user_token, rule_id)
+        );
     """)
+
+    # Add module and exercise_type columns to attempts if missing
+    try:
+        conn.execute("SELECT module FROM attempts LIMIT 1")
+    except Exception:
+        conn.execute("ALTER TABLE attempts ADD COLUMN module TEXT DEFAULT 'verb_position'")
+        conn.execute("ALTER TABLE attempts ADD COLUMN exercise_type TEXT DEFAULT 'reconstruction'")
+
     conn.commit()
     conn.close()
 
@@ -128,13 +150,15 @@ def mark_sentence_shown(user_token, template_id):
         conn.close()
 
 
-def record_attempt(user_token, template_id, user_positions, correct, errors=None):
+def record_attempt(user_token, template_id, user_positions, correct, errors=None,
+                   module="verb_position", exercise_type="reconstruction"):
     conn = get_db()
     conn.execute(
-        """INSERT INTO attempts (user_token, template_id, user_positions_json, correct, errors_json)
-           VALUES (?, ?, ?, ?, ?)""",
+        """INSERT INTO attempts (user_token, template_id, user_positions_json, correct, errors_json,
+           module, exercise_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (user_token, template_id, json.dumps(user_positions), 1 if correct else 0,
-         json.dumps(errors) if errors else None)
+         json.dumps(errors) if errors else None, module, exercise_type)
     )
     conn.commit()
     conn.close()
@@ -310,3 +334,91 @@ def delete_saved_word(user_token, word_id):
     )
     conn.commit()
     conn.close()
+
+
+# ─── GRAMMAR RULES / SM-2 SPACED REPETITION ──────────────
+
+def update_grammar_rule(user_token, module, rule_id, was_correct):
+    """Update grammar rule tracking with SM-2 spaced repetition."""
+    from datetime import timedelta
+    conn = get_db()
+    now = datetime.now().isoformat()
+
+    row = conn.execute(
+        "SELECT * FROM grammar_rules WHERE user_token = ? AND rule_id = ?",
+        (user_token, rule_id)
+    ).fetchone()
+
+    if row:
+        row = dict(row)
+        times_tested = row["times_tested"] + 1
+        times_correct = row["times_correct"] + (1 if was_correct else 0)
+        ease_factor = row["ease_factor"]
+        interval_days = row["interval_days"]
+
+        if was_correct:
+            interval_days = interval_days * ease_factor
+            ease_factor = min(ease_factor + 0.1, 3.0)
+        else:
+            interval_days = 1
+            ease_factor = max(ease_factor - 0.2, 1.3)
+
+        next_review = (datetime.now() + timedelta(days=interval_days)).isoformat()
+
+        conn.execute("""
+            UPDATE grammar_rules
+            SET times_tested = ?, times_correct = ?, ease_factor = ?,
+                interval_days = ?, last_tested = ?, next_review = ?
+            WHERE user_token = ? AND rule_id = ?
+        """, (times_tested, times_correct, ease_factor, interval_days,
+              now, next_review, user_token, rule_id))
+    else:
+        interval_days = 1 if not was_correct else 2.5
+        ease_factor = 2.5
+        next_review = (datetime.now() + timedelta(days=interval_days)).isoformat()
+
+        conn.execute("""
+            INSERT INTO grammar_rules
+            (user_token, module, rule_id, times_tested, times_correct,
+             ease_factor, interval_days, last_tested, next_review)
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+        """, (user_token, module, rule_id, 1 if was_correct else 0,
+              ease_factor, interval_days, now, next_review))
+
+    conn.commit()
+    conn.close()
+
+
+def get_grammar_rules_due(user_token, module=None):
+    """Get grammar rules due for review."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    if module:
+        rows = conn.execute("""
+            SELECT * FROM grammar_rules
+            WHERE user_token = ? AND module = ? AND next_review <= ?
+            ORDER BY next_review ASC
+        """, (user_token, module, now)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT * FROM grammar_rules
+            WHERE user_token = ? AND next_review <= ?
+            ORDER BY next_review ASC
+        """, (user_token, now)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_module_stats(user_token):
+    """Get per-module attempt statistics."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT module, exercise_type,
+               COUNT(*) as total,
+               SUM(correct) as correct_count
+        FROM attempts
+        WHERE user_token = ?
+        GROUP BY module, exercise_type
+    """, (user_token,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

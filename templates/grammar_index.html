@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Grammar Modules — Torture Chamber{% endblock %}
+
+{% block content %}
+<div class="hero">
+    <h1>Grammar<br><span class="accent">Torture Chamber</span></h1>
+    <p class="subtitle">Choose a grammar module to practice.<br>
+    From adjective endings to passive voice.</p>
+</div>
+
+<div class="module-grid">
+    {% for key, mod in modules.items() %}
+    <div class="module-card" style="--module-color: {{ mod.color }}">
+        <div class="module-card-header">
+            <span class="module-tag" style="background: {{ mod.color }}">{{ mod.name }}</span>
+            {% set counts = module_counts.get(key, {}) %}
+            {% set total_ex = counts.values()|sum if counts else 0 %}
+            <span class="module-count">{{ total_ex }} exercises</span>
+        </div>
+        <div class="module-name-en">{{ mod.name_en }}</div>
+        <div class="module-desc">{{ mod.description }}</div>
+
+        {% if stats_by_module.get(key) %}
+        <div class="module-progress">
+            {% set st = stats_by_module[key] %}
+            {% set acc = (st.correct / st.total * 100)|round|int if st.total > 0 else 0 %}
+            <div class="module-progress-bar">
+                <div class="module-progress-fill" style="width: {{ acc }}%; background: {{ mod.color }}"></div>
+            </div>
+            <span class="module-progress-text">{{ acc }}% ({{ st.total }} attempts)</span>
+        </div>
+        {% endif %}
+
+        <div class="module-levels">
+            {% for lvl in mod.levels %}
+            <a href="/grammar/{{ key }}?level={{ lvl }}" class="module-level-btn level-{{ ['a2','b1','b2','c1'][lvl-1] }}">
+                {{ ['A2','B1','B2','C1'][lvl-1] }}
+                {% if counts.get(lvl) %}<small>{{ counts[lvl] }}</small>{% endif %}
+            </a>
+            {% endfor %}
+            <a href="/grammar/{{ key }}" class="module-level-btn module-level-all">All</a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if summary.total_attempts > 0 %}
+<div class="stats-bar">
+    <div class="stat">
+        <div class="stat-value">{{ summary.total_attempts }}</div>
+        <div class="stat-label">Versuche</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.accuracy }}%</div>
+        <div class="stat-label">Genauigkeit</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.current_streak }}</div>
+        <div class="stat-label">Serie</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ summary.pending_retries }}</div>
+        <div class="stat-label">Wiederholung</div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
