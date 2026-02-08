@@ -1,11 +1,23 @@
+databases:
+  - name: german-learning-db
+    databaseName: german_learning
+    user: german_user
 services:
   - type: web
     name: verb-end-torture-chamber
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2
+    startCommand: gunicorn app:app
+    disk:
+      name: german-learning-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: german-learning-db
+          property: connectionString
       - key: SECRET_KEY
         generateValue: true
       - key: API_TOKEN
