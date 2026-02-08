@@ -138,6 +138,28 @@ def dashboard():
                            summary=summary,
                            saved_words=saved_words)
 
+@app.route('/admin/download-db')
+def download_db():
+    from flask import send_file
+    admin_password = os.environ.get('ADMIN_PASSWORD')
+    provided_password = request.args.get('password')
+    
+    if not admin_password or provided_password != admin_password:
+        return "Unauthorized - Invalid password", 401
+    
+    if os.environ.get('RENDER'):
+        db_path = '/data/german_learning.db'
+    else:
+        db_path = 'german_learning.db'
+    
+    if not os.path.exists(db_path):
+        return "Database not found", 404
+    
+    return send_file(
+        db_path, 
+        as_attachment=True, 
+        download_name=f'german_learning_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
+    )
 
 # ─── API ROUTES ────────────────────────────────────────────────────────
 
@@ -528,6 +550,27 @@ def mcp_sentence_info():
         "by_difficulty": count_by_difficulty(),
         "clause_types": list(set(t["clause_type"] for t in SENTENCE_BANK))
     })
+
+@app.route('/admin/backup-info')
+def backup_info():
+    admin_password = os.environ.get('ADMIN_PASSWORD')
+    provided_password = request.args.get('password')
+    
+    if not admin_password or provided_password != admin_password:
+        return "Unauthorized", 401
+    
+    db_path = '/data/german_learning.db' if os.environ.get('RENDER') else 'german_learning.db'
+    
+    if os.path.exists(db_path):
+        stat = os.stat(db_path)
+        return {
+            'database_exists': True,
+            'size_mb': round(stat.st_size / (1024 * 1024), 2),
+            'last_modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            'download_url': f'/admin/download-db?password=YOUR_PASSWORD'
+        }
+    
+    return {'database_exists': False}
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────────
