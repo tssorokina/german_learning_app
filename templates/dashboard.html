@@ -23,6 +23,55 @@
     </div>
 </div>
 
+<!-- ─── SAVED WORDS ──────────────────────────────── -->
+<section class="saved-words-section">
+    <div class="saved-words-header">
+        <h2>Saved Words <span class="word-count-badge">{{ saved_words|length }}</span></h2>
+        {% if saved_words|length > 0 %}
+        <div class="export-buttons">
+            <a href="/api/words/export/anki" class="btn btn-sm btn-secondary" download>Anki Export</a>
+            <a href="/api/words/export/quizlet" class="btn btn-sm btn-secondary" download>Quizlet Export</a>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if saved_words|length > 0 %}
+    <div class="table-wrapper">
+        <table class="saved-words-table">
+            <thead>
+                <tr>
+                    <th>Word</th>
+                    <th>Definition</th>
+                    <th>Examples</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for w in saved_words %}
+                <tr data-word-id="{{ w.id }}">
+                    <td class="word-cell">{{ w.word }}</td>
+                    <td class="def-cell">{{ w.definition[:120] }}{% if w.definition and w.definition|length > 120 %}...{% endif %}</td>
+                    <td class="def-cell">{{ (w.examples or '')[:80] }}{% if w.examples and w.examples|length > 80 %}...{% endif %}</td>
+                    <td>
+                        <button class="delete-word-btn" onclick="deleteWord({{ w.id }}, this)" title="Delete">&times;</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div style="margin-top: 12px; color: var(--text-dim); font-size: 0.8rem;">
+        <p><strong>Anki Export:</strong> Downloads a TSV file. In Anki, go to File &rarr; Import, select the file, set separator to Tab.</p>
+        <p><strong>Quizlet Export:</strong> Downloads a text file. In Quizlet, create a new set, click Import, paste the file contents.</p>
+    </div>
+    {% else %}
+    <div class="saved-words-empty">
+        No saved words yet. During exercises, hold any word to see its Duden definition and save it to your vocabulary list.
+    </div>
+    {% endif %}
+</section>
+
 {% if error_stats %}
 <section class="dashboard-section">
     <h2>Most Frequent Error Categories</h2>
@@ -55,7 +104,7 @@
     <div class="attempts-list">
         {% for r in recent %}
         <div class="attempt-row {{ 'correct' if r.correct else 'incorrect' }}">
-            <span class="attempt-icon">{{ '✓' if r.correct else '✗' }}</span>
+            <span class="attempt-icon">{{ '&#10003;' if r.correct else '&#10007;' }}</span>
             <span class="attempt-text">{{ r.full_text[:60] }}{% if r.full_text|length > 60 %}...{% endif %}</span>
             <span class="attempt-type">{{ r.clause_structure }}</span>
         </div>
@@ -141,6 +190,22 @@ function drawChart() {
             ctx.fillText(d.day.slice(5), x - 15, canvas.height - 5);
         }
     });
+}
+
+function deleteWord(wordId, btn) {
+    if (!confirm('Delete this word?')) return;
+    fetch('/api/words/' + wordId, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(() => {
+            const row = btn.closest('tr');
+            if (row) row.remove();
+            // Update badge count
+            const badge = document.querySelector('.word-count-badge');
+            if (badge) {
+                const count = parseInt(badge.textContent) - 1;
+                badge.textContent = count;
+            }
+        });
 }
 
 drawChart();

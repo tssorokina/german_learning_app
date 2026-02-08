@@ -1,6 +1,11 @@
 /**
- * Verb-End Torture Chamber — Drag & Drop Exercise Engine
+ * Verb-End Torture Chamber — Full-Sentence Drag & Drop Exercise Engine
  * Touch-friendly: works on iPhone/Android via pointer events.
+ *
+ * Modes:
+ *   - Tap: tap a word chip to place it in the next open slot
+ *   - Drag: drag a chip onto any slot
+ *   - Long-press: hold a chip to see Duden dictionary popup
  */
 (function () {
     "use strict";
@@ -8,7 +13,7 @@
     const exercise = EXERCISE_DATA;
     const retryId = RETRY_ID;
     const sentenceArea = document.getElementById("sentence-area");
-    const verbTray = document.getElementById("verb-tray");
+    const wordTray = document.getElementById("word-tray");
     const btnCheck = document.getElementById("btn-check");
     const btnReset = document.getElementById("btn-reset");
     const resultArea = document.getElementById("result-area");
@@ -17,159 +22,170 @@
     // State
     let slotElements = [];
     let chipElements = [];
-    let dragState = null; // { chip, ghost, originSlot }
+    let dragState = null;
+    let selectedChip = null;
+    let longPressTimer = null;
+    const LONG_PRESS_DURATION = 500; // ms
 
     // ─── INIT ────────────────────────────────────────────
     function init() {
         clauseType.textContent = exercise.clause_type.replace(/_/g, " ");
         renderSentence();
-        renderVerbs();
+        renderWords();
         btnCheck.addEventListener("click", checkAnswer);
         btnReset.addEventListener("click", resetExercise);
     }
 
     function renderSentence() {
         sentenceArea.innerHTML = "";
-        const words = exercise.words;
-        const slotIndices = new Set(exercise.slots.map(s => s.index));
-        let slotIdx = 0;
+        slotElements = [];
+        const numSlots = exercise.num_slots;
+        const suffixes = exercise.slot_suffixes;
 
-        words.forEach((word, i) => {
-            if (slotIndices.has(i)) {
-                const slot = exercise.slots[slotIdx];
-                const el = document.createElement("span");
-                el.className = "slot";
-                el.dataset.slotIndex = slotIdx;
-                el.dataset.wordIndex = i;
-                el.dataset.suffix = slot.suffix || "";
-                el.innerHTML = '<span class="placed-verb"></span>' + (slot.suffix || "");
-                slotElements.push(el);
-                sentenceArea.appendChild(el);
-                slotIdx++;
+        for (let i = 0; i < numSlots; i++) {
+            const wrapper = document.createElement("span");
+            wrapper.className = "slot-wrapper";
 
-                // Drop target listeners
-                el.addEventListener("pointerover", onSlotOver);
-                el.addEventListener("pointerout", onSlotOut);
-                el.addEventListener("click", onSlotClick);
-            } else {
-                const span = document.createElement("span");
-                span.className = "word-token";
-                span.textContent = word;
-                sentenceArea.appendChild(span);
+            const el = document.createElement("span");
+            el.className = "slot";
+            el.dataset.slotIndex = i;
+            el.innerHTML = '<span class="placed-word"></span>';
+            slotElements.push(el);
+            wrapper.appendChild(el);
+
+            // Punctuation OUTSIDE the slot
+            if (suffixes[i]) {
+                const punct = document.createElement("span");
+                punct.className = "slot-punct";
+                punct.textContent = suffixes[i];
+                wrapper.appendChild(punct);
             }
-        });
+
+            sentenceArea.appendChild(wrapper);
+
+            // Drop target listeners
+            el.addEventListener("pointerover", onSlotOver);
+            el.addEventListener("pointerout", onSlotOut);
+            el.addEventListener("click", onSlotClick);
+        }
     }
 
-    function renderVerbs() {
-        verbTray.innerHTML = "";
+    function renderWords() {
+        wordTray.innerHTML = "";
         chipElements = [];
-        exercise.verbs.forEach((verb, i) => {
+        exercise.shuffled_words.forEach((word, i) => {
             const chip = document.createElement("span");
-            chip.className = "verb-chip";
-            chip.textContent = verb;
-            chip.dataset.verb = verb;
+            chip.className = "word-chip";
+            chip.textContent = word;
+            chip.dataset.word = word;
             chip.dataset.chipIndex = i;
 
-            // Touch + mouse drag
+            // Interaction handlers
             chip.addEventListener("pointerdown", onChipDown);
             chip.addEventListener("click", onChipClick);
+
             chipElements.push(chip);
-            verbTray.appendChild(chip);
+            wordTray.appendChild(chip);
         });
     }
 
-    // ─── CHIP INTERACTION ────────────────────────────────
-    let selectedChip = null;
-
+    // ─── TAP TO PLACE ────────────────────────────────────
     function onChipClick(e) {
-        if (dragState) return; // Ignore during drag
+        if (dragState) return;
         const chip = e.currentTarget;
         if (chip.classList.contains("placed")) return;
 
-        // Toggle selection
-        if (selectedChip === chip) {
-            chip.style.outline = "";
-            selectedChip = null;
-        } else {
-            // Deselect previous
-            if (selectedChip) selectedChip.style.outline = "";
-            chip.style.outline = "2px solid #fff";
-            selectedChip = chip;
+        // If we just came from a long-press, skip
+        if (chip._longPressTriggered) {
+            chip._longPressTriggered = false;
+            return;
+        }
+
+        // Tap-to-place: put in next open slot
+        const nextSlot = slotElements.find(s =>
+            s.querySelector(".placed-word").textContent === "");
+        if (nextSlot) {
+            placeWord(chip, nextSlot);
         }
     }
 
     function onSlotClick(e) {
         const slot = e.currentTarget;
-
-        // If slot already has a verb, return it to tray
-        const placed = slot.querySelector(".placed-verb");
+        // If slot has a word, return it to tray
+        const placed = slot.querySelector(".placed-word");
         if (placed && placed.textContent) {
             returnToTray(placed.textContent, slot);
-            return;
-        }
-
-        // If a chip is selected, place it
-        if (selectedChip && !selectedChip.classList.contains("placed")) {
-            placeVerb(selectedChip, slot);
-            selectedChip.style.outline = "";
-            selectedChip = null;
         }
     }
 
-    // ─── DRAG (pointer events) ───────────────────────────
+    // ─── DRAG & LONG-PRESS (pointer events) ─────────────
     function onChipDown(e) {
         const chip = e.currentTarget;
         if (chip.classList.contains("placed")) return;
 
         e.preventDefault();
+
+        const startX = e.clientX;
+        const startY = e.clientY;
+        let isDragging = false;
+        chip._longPressTriggered = false;
+
+        // Start long-press timer
+        longPressTimer = setTimeout(() => {
+            if (!isDragging) {
+                chip._longPressTriggered = true;
+                showDudenPopup(chip.dataset.word, chip);
+            }
+        }, LONG_PRESS_DURATION);
+
         chip.setPointerCapture(e.pointerId);
 
-        // Create ghost
-        const ghost = document.createElement("div");
-        ghost.className = "drag-ghost";
-        ghost.textContent = chip.textContent;
-        document.body.appendChild(ghost);
-        ghost.style.left = e.clientX + "px";
-        ghost.style.top = e.clientY + "px";
-
-        chip.classList.add("dragging");
-
-        dragState = { chip, ghost, originSlot: null };
-
         const onMove = (ev) => {
-            if (!dragState) return;
-            ghost.style.left = ev.clientX + "px";
-            ghost.style.top = ev.clientY + "px";
+            const dx = Math.abs(ev.clientX - startX);
+            const dy = Math.abs(ev.clientY - startY);
 
-            // Highlight slot under pointer
-            const target = document.elementFromPoint(ev.clientX, ev.clientY);
-            slotElements.forEach(s => s.classList.remove("drag-over"));
-            if (target && target.closest(".slot")) {
-                target.closest(".slot").classList.add("drag-over");
+            // If moved enough, start drag
+            if (!isDragging && (dx > 5 || dy > 5)) {
+                isDragging = true;
+                clearTimeout(longPressTimer);
+                startDrag(chip, ev);
+            }
+
+            if (isDragging && dragState) {
+                dragState.ghost.style.left = ev.clientX + "px";
+                dragState.ghost.style.top = ev.clientY + "px";
+
+                // Highlight slot under pointer
+                const target = document.elementFromPoint(ev.clientX, ev.clientY);
+                slotElements.forEach(s => s.classList.remove("drag-over"));
+                if (target && target.closest(".slot")) {
+                    target.closest(".slot").classList.add("drag-over");
+                }
             }
         };
 
         const onUp = (ev) => {
-            if (!dragState) return;
-            chip.classList.remove("dragging");
-            ghost.remove();
+            clearTimeout(longPressTimer);
 
-            // Find slot under pointer
-            // Need to temporarily hide ghost to get element below
-            const target = document.elementFromPoint(ev.clientX, ev.clientY);
-            const slotEl = target ? target.closest(".slot") : null;
+            if (isDragging && dragState) {
+                chip.classList.remove("dragging");
+                dragState.ghost.remove();
 
-            slotElements.forEach(s => s.classList.remove("drag-over"));
+                const target = document.elementFromPoint(ev.clientX, ev.clientY);
+                const slotEl = target ? target.closest(".slot") : null;
+                slotElements.forEach(s => s.classList.remove("drag-over"));
 
-            if (slotEl) {
-                const existing = slotEl.querySelector(".placed-verb");
-                if (existing && existing.textContent) {
-                    returnToTray(existing.textContent, slotEl);
+                if (slotEl) {
+                    const existing = slotEl.querySelector(".placed-word");
+                    if (existing && existing.textContent) {
+                        returnToTray(existing.textContent, slotEl);
+                    }
+                    placeWord(chip, slotEl);
                 }
-                placeVerb(chip, slotEl);
+
+                dragState = null;
             }
 
-            dragState = null;
             chip.removeEventListener("pointermove", onMove);
             chip.removeEventListener("pointerup", onUp);
             chip.removeEventListener("pointercancel", onUp);
@@ -180,6 +196,18 @@
         chip.addEventListener("pointercancel", onUp);
     }
 
+    function startDrag(chip, ev) {
+        const ghost = document.createElement("div");
+        ghost.className = "drag-ghost";
+        ghost.textContent = chip.textContent;
+        document.body.appendChild(ghost);
+        ghost.style.left = ev.clientX + "px";
+        ghost.style.top = ev.clientY + "px";
+
+        chip.classList.add("dragging");
+        dragState = { chip, ghost, originSlot: null };
+    }
+
     function onSlotOver(e) {
         if (dragState) e.currentTarget.classList.add("drag-over");
     }
@@ -188,38 +216,149 @@
     }
 
     // ─── PLACE / RETURN ──────────────────────────────────
-    function placeVerb(chip, slotEl) {
-        const placed = slotEl.querySelector(".placed-verb");
-        placed.textContent = chip.dataset.verb;
+    function placeWord(chip, slotEl) {
+        const placed = slotEl.querySelector(".placed-word");
+        placed.textContent = chip.dataset.word;
         slotEl.classList.add("filled");
         chip.classList.add("placed");
         updateCheckButton();
     }
 
-    function returnToTray(verb, slotEl) {
-        const placed = slotEl.querySelector(".placed-verb");
+    function returnToTray(word, slotEl) {
+        const placed = slotEl.querySelector(".placed-word");
         placed.textContent = "";
         slotEl.classList.remove("filled");
-        // Find the chip and un-place it
-        chipElements.forEach(c => {
-            if (c.dataset.verb === verb && c.classList.contains("placed")) {
+        // Find the first chip with this word that is placed and un-place it
+        for (const c of chipElements) {
+            if (c.dataset.word === word && c.classList.contains("placed")) {
                 c.classList.remove("placed");
+                break;
             }
-        });
+        }
         updateCheckButton();
     }
 
     function updateCheckButton() {
         const allFilled = slotElements.every(s =>
-            s.querySelector(".placed-verb").textContent !== "");
+            s.querySelector(".placed-word").textContent !== "");
         btnCheck.disabled = !allFilled;
+    }
+
+    // ─── DUDEN POPUP ─────────────────────────────────────
+    let currentPopup = null;
+
+    function showDudenPopup(word, chipEl) {
+        // Close any existing popup
+        closeDudenPopup();
+
+        const popup = document.createElement("div");
+        popup.className = "duden-popup";
+        popup.innerHTML = `
+            <div class="duden-popup-header">
+                <strong>${word}</strong>
+                <button class="duden-close-btn" title="Schlie\u00dfen">&times;</button>
+            </div>
+            <div class="duden-popup-body">
+                <div class="duden-loading">Lade Definition...</div>
+            </div>
+            <div class="duden-popup-actions">
+                <button class="btn btn-primary btn-sm duden-save-btn" disabled>Wort speichern</button>
+                <a class="btn btn-secondary btn-sm duden-link-btn" href="https://www.duden.de/rechtschreibung/${encodeURIComponent(word)}" target="_blank" rel="noopener">Duden.de</a>
+            </div>
+        `;
+
+        document.body.appendChild(popup);
+        currentPopup = popup;
+
+        // Position popup near the chip
+        const chipRect = chipEl.getBoundingClientRect();
+        const popupHeight = 280;
+        let top = chipRect.top - popupHeight - 8;
+        if (top < 10) top = chipRect.bottom + 8;
+        let left = chipRect.left;
+        if (left + 320 > window.innerWidth) left = window.innerWidth - 330;
+        if (left < 10) left = 10;
+        popup.style.top = top + "px";
+        popup.style.left = left + "px";
+
+        // Close button
+        popup.querySelector(".duden-close-btn").addEventListener("click", closeDudenPopup);
+
+        // Fetch definition
+        let dudenData = null;
+        fetch(`/api/duden/${encodeURIComponent(word)}`)
+            .then(r => r.json())
+            .then(data => {
+                dudenData = data;
+                const body = popup.querySelector(".duden-popup-body");
+                let html = "";
+                if (data.word_type) {
+                    html += `<div class="duden-wordtype">${data.word_type}</div>`;
+                }
+                html += `<div class="duden-def">${data.definition}</div>`;
+                if (data.examples && data.examples.length > 0) {
+                    html += `<div class="duden-examples"><strong>Beispiele:</strong><ul>`;
+                    data.examples.forEach(ex => {
+                        html += `<li>${ex}</li>`;
+                    });
+                    html += `</ul></div>`;
+                }
+                body.innerHTML = html;
+
+                // Enable save button
+                const saveBtn = popup.querySelector(".duden-save-btn");
+                saveBtn.disabled = false;
+                saveBtn.addEventListener("click", () => {
+                    saveWordToVocab(dudenData);
+                    saveBtn.textContent = "Gespeichert!";
+                    saveBtn.disabled = true;
+                });
+            })
+            .catch(() => {
+                const body = popup.querySelector(".duden-popup-body");
+                body.innerHTML = '<div class="duden-def">Fehler beim Laden. Versuchen Sie es auf duden.de direkt.</div>';
+            });
+
+        // Close on clicking outside
+        setTimeout(() => {
+            document.addEventListener("click", onClickOutsidePopup);
+        }, 100);
+    }
+
+    function closeDudenPopup() {
+        if (currentPopup) {
+            currentPopup.remove();
+            currentPopup = null;
+        }
+        document.removeEventListener("click", onClickOutsidePopup);
+    }
+
+    function onClickOutsidePopup(e) {
+        if (currentPopup && !currentPopup.contains(e.target) &&
+            !e.target.closest(".word-chip")) {
+            closeDudenPopup();
+        }
+    }
+
+    function saveWordToVocab(dudenData) {
+        const sourceSentence = exercise.template_id;
+        fetch("/api/words", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                word: dudenData.word,
+                definition: dudenData.definition,
+                examples: (dudenData.examples || []).join("\n"),
+                source_sentence: sourceSentence
+            })
+        });
     }
 
     // ─── CHECK ANSWER ────────────────────────────────────
     async function checkAnswer() {
         const positions = slotElements.map((s, i) => ({
             slot_index: i,
-            verb: s.querySelector(".placed-verb").textContent
+            word: s.querySelector(".placed-word").textContent
         }));
 
         btnCheck.disabled = true;
@@ -245,7 +384,6 @@
     }
 
     function showResult(data, userPositions) {
-        // Hide check/reset, show result
         resultArea.classList.remove("hidden");
 
         const icon = document.getElementById("result-icon");
@@ -255,12 +393,12 @@
         const errorDetails = document.getElementById("error-details");
 
         if (data.correct) {
-            icon.textContent = "✓";
+            icon.textContent = "\u2713";
             icon.style.color = "var(--success)";
             msg.textContent = "Richtig! Sehr gut!";
             msg.style.color = "var(--success)";
         } else {
-            icon.textContent = "✗";
+            icon.textContent = "\u2717";
             icon.style.color = "var(--error)";
             msg.textContent = "Nicht ganz richtig.";
             msg.style.color = "var(--error)";
@@ -270,18 +408,19 @@
         explanationBox.innerHTML = "<strong>Rule:</strong> " + data.explanation;
 
         // Mark slots correct/incorrect
-        if (data.slots) {
+        if (data.slot_results) {
             slotElements.forEach((s, i) => {
-                const placed = s.querySelector(".placed-verb").textContent;
-                if (data.slots[i] && placed === data.slots[i].correct_verb) {
-                    s.classList.add("correct-slot");
-                } else {
-                    s.classList.add("incorrect-slot");
+                if (data.slot_results[i]) {
+                    if (data.slot_results[i].is_correct) {
+                        s.classList.add("correct-slot");
+                    } else {
+                        s.classList.add("incorrect-slot");
+                    }
                 }
             });
         }
 
-        // Error details
+        // Error details (verb-specific)
         errorDetails.innerHTML = "";
         if (data.errors && data.errors.length > 0) {
             data.errors.forEach(err => {
@@ -290,31 +429,30 @@
                 card.innerHTML = `
                     <div class="error-cat">${err.category_name_en}</div>
                     <div class="error-desc">${err.description}</div>
-                    <div class="error-tip">💡 ${err.tip}</div>
+                    <div class="error-tip">${err.tip}</div>
                     <div class="error-rule">${err.rule}</div>
                 `;
                 errorDetails.appendChild(card);
             });
         }
 
-        // Scroll result into view
         resultArea.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
     // ─── RESET ───────────────────────────────────────────
     function resetExercise() {
         slotElements.forEach(s => {
-            s.querySelector(".placed-verb").textContent = "";
+            s.querySelector(".placed-word").textContent = "";
             s.classList.remove("filled", "correct-slot", "incorrect-slot");
         });
         chipElements.forEach(c => {
             c.classList.remove("placed", "dragging");
-            c.style.outline = "";
         });
         selectedChip = null;
         resultArea.classList.add("hidden");
         btnCheck.disabled = true;
-        btnCheck.textContent = "Prüfen";
+        btnCheck.textContent = "Pr\u00fcfen";
+        closeDudenPopup();
     }
 
     // ─── START ───────────────────────────────────────────
