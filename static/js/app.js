@@ -371,7 +371,8 @@
                 body: JSON.stringify({
                     template_id: exercise.template_id,
                     positions: positions,
-                    retry_id: retryId
+                    retry_id: retryId,
+                    module: exercise.module || "verb_position"
                 })
             });
 

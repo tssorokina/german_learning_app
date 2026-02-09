@@ -566,7 +566,19 @@ def api_check_answer():
 
     template = get_template_by_id(template_id)
     if not template:
-        return jsonify({"error": "unknown sentence"}), 404
+        # Check grammar exercises (konnektoren, konjunktiv, relativ use reconstruction)
+        grammar_ex = get_exercise_by_id(template_id)
+        if grammar_ex and grammar_ex["type"] == "reconstruction":
+            template = {
+                "id": grammar_ex["id"],
+                "text": grammar_ex["data"]["text"],
+                "verbs": grammar_ex["data"]["verbs"],
+                "clause_type": grammar_ex["data"]["clause_type"],
+                "difficulty": grammar_ex["level"],
+                "explanation": grammar_ex["grammar_rule"]
+            }
+        else:
+            return jsonify({"error": "unknown sentence"}), 404
 
     exercise = prepare_exercise(template)
 
@@ -616,7 +628,15 @@ def api_check_answer():
 
     # Record attempt
     record_attempt(token, template_id, user_positions, all_correct,
-                   errors if errors else None, module=module)
+                   errors if errors else None, module=module,
+                   exercise_type="reconstruction")
+
+    # Update grammar rule tracking for grammar module exercises
+    if module != "verb_position":
+        grammar_ex = get_exercise_by_id(template_id)
+        if grammar_ex:
+            update_grammar_rule(token, module,
+                                grammar_ex.get("topic", template_id), all_correct)
 
     # If retry exercise completed correctly, mark it
     if all_correct and retry_id:
@@ -630,13 +650,22 @@ def api_check_answer():
             schedule_retry(token, template_id, error_id, days_delay=2)
             explanations.append(get_error_explanation(err))
 
-    return jsonify({
+    # Build response with grammar_rule for consistency with other exercise types
+    response = {
         "correct": all_correct,
         "full_sentence": exercise["full_text"],
         "explanation": exercise["explanation"],
         "errors": explanations,
         "slot_results": slot_results
-    })
+    }
+    # Add grammar_rule/grammar_tip for grammar module exercises
+    if module != "verb_position":
+        grammar_ex = get_exercise_by_id(template_id)
+        if grammar_ex:
+            response["grammar_rule"] = grammar_ex.get("grammar_rule", "")
+            response["grammar_tip"] = grammar_ex.get("grammar_tip", "")
+
+    return jsonify(response)
 
 
 @app.route("/api/stats", methods=["GET"])

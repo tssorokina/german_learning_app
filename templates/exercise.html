@@ -36,7 +36,11 @@
         <div id="explanation-box" class="explanation-box"></div>
         <div id="error-details" class="error-details"></div>
         <div class="action-bar">
+            {% if module_key and module_key != 'verb_position' %}
+            <a href="/grammar/{{ module_key }}" class="btn btn-primary">Next Exercise</a>
+            {% else %}
             <a href="/exercise?difficulty={{ difficulty_label|replace('A2','1')|replace('B1','2')|replace('B2','3')|replace('C1','4') }}" class="btn btn-primary">Next Exercise</a>
+            {% endif %}
             <a href="/" class="btn btn-secondary">Home</a>
         </div>
     </div>
