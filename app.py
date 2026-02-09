@@ -1,10 +1,19 @@
 """
-Verb-End Torture Chamber — Flask Web Application.
+German Grammar Torture Chamber — Flask Web Application.
 
-A German grammar trainer focused on verb placement in subordinate/nested clauses.
+A German grammar trainer with multiple exercise modules:
+- Verb placement (reconstruction)
+- Adjective declension (gap-fill)
+- Connectors & word order (reconstruction)
+- Passive voice (transformation)
+- Konjunktiv (reconstruction + gap-fill)
+- Relative clauses (reconstruction)
+- Prepositions & cases (quick-select)
+- Nominalization (transformation)
 """
 import os
 import json
+import random
 import secrets
 from datetime import date, datetime
 from functools import wraps
@@ -17,12 +26,17 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       log_error, schedule_retry, complete_retry, get_error_stats,
                       get_recent_attempts, get_accuracy_over_time, get_user_summary,
                       store_daily_message, get_daily_message, mark_daily_sent,
-                      save_word, get_saved_words, delete_saved_word)
+                      save_word, get_saved_words, delete_saved_word,
+                      update_grammar_rule, get_module_stats)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
                        count_by_difficulty)
-from error_analyzer import (analyze_errors, get_error_explanation,
+from error_analyzer import (analyze_errors, analyze_gap_fill_errors,
+                            analyze_quick_select_errors, get_error_explanation,
                             get_all_categories, ERROR_CATEGORIES)
+from exercise_types import GRAMMAR_MODULES, EXERCISE_TYPES
+from grammar_exercises import (get_exercises_by_module, get_exercise_by_id,
+                               count_by_module_and_level, ALL_GRAMMAR_EXERCISES)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
@@ -64,7 +78,23 @@ def ensure_db():
 def index():
     token = get_user_token()
     summary = get_user_summary(token)
-    return render_template("index.html", summary=summary)
+    module_stats = get_module_stats(token)
+    module_counts = count_by_module_and_level()
+
+    # Build stats lookup {module: {total, correct}}
+    stats_by_module = {}
+    for s in module_stats:
+        mod = s["module"]
+        if mod not in stats_by_module:
+            stats_by_module[mod] = {"total": 0, "correct": 0}
+        stats_by_module[mod]["total"] += s["total"]
+        stats_by_module[mod]["correct"] += (s["correct_count"] or 0)
+
+    return render_template("index.html",
+                           summary=summary,
+                           modules=GRAMMAR_MODULES,
+                           module_counts=module_counts,
+                           stats_by_module=stats_by_module)
 
 
 @app.route("/exercise")
@@ -109,6 +139,331 @@ def exercise_page():
                            difficulty_label=_diff_label(exercise["difficulty"]))
 
 
+# ─── MODULE-BASED EXERCISE ROUTES ─────────────────────────────────────
+
+@app.route("/grammar")
+def grammar_index():
+    """Grammar modules overview page."""
+    token = get_user_token()
+    summary = get_user_summary(token)
+    module_stats = get_module_stats(token)
+    module_counts = count_by_module_and_level()
+
+    stats_by_module = {}
+    for s in module_stats:
+        mod = s["module"]
+        if mod not in stats_by_module:
+            stats_by_module[mod] = {"total": 0, "correct": 0}
+        stats_by_module[mod]["total"] += s["total"]
+        stats_by_module[mod]["correct"] += (s["correct_count"] or 0)
+
+    return render_template("grammar_index.html",
+                           modules=GRAMMAR_MODULES,
+                           module_counts=module_counts,
+                           stats_by_module=stats_by_module,
+                           summary=summary)
+
+
+@app.route("/grammar/<module_key>")
+def grammar_exercise(module_key):
+    """Serve a grammar exercise for a specific module."""
+    token = get_user_token()
+    module_info = GRAMMAR_MODULES.get(module_key)
+    if not module_info:
+        abort(404)
+
+    level = request.args.get("level", type=int)
+    exercises = get_exercises_by_module(module_key, level=level)
+
+    if not exercises:
+        return render_template("no_exercises.html")
+
+    # Pick a random exercise
+    ex = random.choice(exercises)
+    exercise_type = ex["type"]
+
+    # Route to the correct template based on exercise type
+    if exercise_type == "gap_fill":
+        return _serve_gap_fill(ex, module_key, module_info)
+    elif exercise_type == "transformation":
+        return _serve_transformation(ex, module_key, module_info)
+    elif exercise_type == "quick_select":
+        return _serve_quick_select(ex, module_key, module_info)
+    else:
+        # reconstruction — use existing engine via prepare_exercise
+        return _serve_reconstruction(ex, module_key, module_info, token)
+
+
+def _serve_gap_fill(ex, module_key, module_info):
+    """Serve a gap-fill exercise."""
+    safe_data = {
+        "exercise_id": ex["id"],
+        "module": module_key,
+        "type": "gap_fill",
+        "level": ex["level"],
+        "topic": ex["topic"],
+        "sentence_template": ex["data"]["sentence_template"],
+        "gaps": [{
+            "position": g["position"],
+            "context": g.get("context", ""),
+            "options": g["options"],
+            "indicative_hint": g.get("indicative_hint", "")
+        } for g in ex["data"]["gaps"]],
+        "grammar_tip": ex.get("grammar_tip", "")
+    }
+    return render_template("gap_fill.html",
+                           exercise=json.dumps(safe_data),
+                           module_name=module_info["name"],
+                           module_key=module_key,
+                           difficulty_label=_diff_label(ex["level"]))
+
+
+def _serve_transformation(ex, module_key, module_info):
+    """Serve a transformation exercise."""
+    words = list(ex["data"]["target_words"])
+    random.shuffle(words)
+    safe_data = {
+        "exercise_id": ex["id"],
+        "module": module_key,
+        "type": "transformation",
+        "level": ex["level"],
+        "topic": ex["topic"],
+        "source": ex["data"]["source"],
+        "shuffled_words": words,
+        "num_slots": len(ex["data"]["target_words"]),
+        "optional_words": ex["data"].get("optional_words", []),
+        "grammar_tip": ex.get("grammar_tip", "")
+    }
+    return render_template("transformation.html",
+                           exercise=json.dumps(safe_data),
+                           module_name=module_info["name"],
+                           module_key=module_key,
+                           difficulty_label=_diff_label(ex["level"]))
+
+
+def _serve_quick_select(ex, module_key, module_info):
+    """Serve a quick-select exercise."""
+    safe_data = {
+        "exercise_id": ex["id"],
+        "module": module_key,
+        "type": "quick_select",
+        "level": ex["level"],
+        "topic": ex["topic"],
+        "sentence": ex["data"]["sentence"],
+        "gaps": [{
+            "position": g["position"],
+            "options": g["options"]
+        } for g in ex["data"]["gaps"]],
+        "grammar_tip": ex.get("grammar_tip", "")
+    }
+    return render_template("quick_select.html",
+                           exercise=json.dumps(safe_data),
+                           module_name=module_info["name"],
+                           module_key=module_key,
+                           difficulty_label=_diff_label(ex["level"]))
+
+
+def _serve_reconstruction(ex, module_key, module_info, token):
+    """Serve a reconstruction exercise for grammar modules."""
+    # These exercises have a 'data' dict with text, verbs, clause_type
+    # We need to prepare them like the existing sentence bank
+    template = {
+        "id": ex["id"],
+        "text": ex["data"]["text"],
+        "verbs": ex["data"]["verbs"],
+        "clause_type": ex["data"]["clause_type"],
+        "difficulty": ex["level"],
+        "explanation": ex["grammar_rule"]
+    }
+    exercise = prepare_exercise(template)
+
+    mark_sentence_shown(token, exercise["template_id"])
+
+    safe_exercise = {
+        "template_id": exercise["template_id"],
+        "num_slots": len(exercise["all_slots"]),
+        "slot_suffixes": [s["suffix"] for s in exercise["all_slots"]],
+        "verb_indices": exercise["verb_positions"],
+        "shuffled_words": exercise["shuffled_words"],
+        "clause_type": exercise["clause_type"],
+        "difficulty": exercise["difficulty"],
+        "module": module_key,
+        # Extra info for reconstruction exercises with source sentences
+        "sentence_a": ex["data"].get("sentence_a", ""),
+        "sentence_b": ex["data"].get("sentence_b", ""),
+    }
+
+    return render_template("exercise.html",
+                           exercise=json.dumps(safe_exercise),
+                           retry_id=None,
+                           difficulty_label=_diff_label(ex["level"]),
+                           module_name=module_info["name"],
+                           module_key=module_key)
+
+
+# ─── GRAMMAR API ENDPOINTS ────────────────────────────────────────────
+
+@app.route("/api/check_gap", methods=["POST"])
+def api_check_gap_fill():
+    """Check a gap-fill exercise answer."""
+    token = get_user_token()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "no data"}), 400
+
+    exercise_id = data.get("exercise_id")
+    user_answers = data.get("answers", {})
+
+    ex = get_exercise_by_id(exercise_id)
+    if not ex:
+        return jsonify({"error": "unknown exercise"}), 404
+
+    # Check answers
+    errors = analyze_gap_fill_errors(ex["data"], user_answers)
+    all_correct = len(errors) == 0
+
+    # Record attempt
+    record_attempt(token, exercise_id, user_answers, all_correct,
+                   errors if errors else None,
+                   module=ex["module"], exercise_type="gap_fill")
+
+    # Update grammar rule tracking
+    update_grammar_rule(token, ex["module"], ex["topic"], all_correct)
+
+    # Log errors
+    explanations = []
+    if errors:
+        for err in errors:
+            error_id = log_error(token, exercise_id, err["category"], err["detail"])
+            schedule_retry(token, exercise_id, error_id, days_delay=2)
+            explanations.append(get_error_explanation(err))
+
+    return jsonify({
+        "correct": all_correct,
+        "full_sentence": ex["data"].get("full_correct", ""),
+        "grammar_rule": ex.get("grammar_rule", ""),
+        "grammar_tip": ex.get("grammar_tip", ""),
+        "errors": explanations,
+        "gap_results": [{
+            "position": g["position"],
+            "correct_answer": g["answer"],
+            "user_answer": user_answers.get(g["position"], ""),
+            "is_correct": user_answers.get(g["position"], "") == g["answer"]
+        } for g in ex["data"]["gaps"]]
+    })
+
+
+@app.route("/api/check_transformation", methods=["POST"])
+def api_check_transformation():
+    """Check a transformation exercise answer."""
+    token = get_user_token()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "no data"}), 400
+
+    exercise_id = data.get("exercise_id")
+    user_positions = data.get("positions", [])
+
+    ex = get_exercise_by_id(exercise_id)
+    if not ex:
+        return jsonify({"error": "unknown exercise"}), 404
+
+    correct_words = ex["data"]["target_words"]
+    correct_order = ex["data"]["correct_order"]
+
+    # Compare user word order to correct order
+    user_words = [p["word"] for p in sorted(user_positions, key=lambda x: x["slot_index"])]
+
+    slot_results = []
+    all_correct = True
+    for i, correct_word in enumerate(correct_words):
+        user_word = user_words[i] if i < len(user_words) else None
+        is_correct = (user_word == correct_word)
+        if not is_correct:
+            all_correct = False
+        slot_results.append({
+            "index": i,
+            "correct_word": correct_word,
+            "user_word": user_word,
+            "is_correct": is_correct
+        })
+
+    # Record attempt
+    record_attempt(token, exercise_id, user_positions, all_correct,
+                   None, module=ex["module"], exercise_type="transformation")
+
+    # Update grammar rule tracking
+    update_grammar_rule(token, ex["module"], ex["topic"], all_correct)
+
+    if not all_correct:
+        error_id = log_error(token, exercise_id, "wrong_" + ex["module"] + "_form",
+                            f"Expected: {correct_order}")
+        schedule_retry(token, exercise_id, error_id, days_delay=2)
+
+    return jsonify({
+        "correct": all_correct,
+        "full_sentence": correct_order,
+        "grammar_rule": ex.get("grammar_rule", ""),
+        "grammar_tip": ex.get("grammar_tip", ""),
+        "errors": [],
+        "slot_results": slot_results
+    })
+
+
+@app.route("/api/check_quick_select", methods=["POST"])
+def api_check_quick_select():
+    """Check a quick-select exercise answer."""
+    token = get_user_token()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "no data"}), 400
+
+    exercise_id = data.get("exercise_id")
+    user_answers = data.get("answers", {})
+
+    ex = get_exercise_by_id(exercise_id)
+    if not ex:
+        return jsonify({"error": "unknown exercise"}), 404
+
+    errors = analyze_quick_select_errors(ex["data"], user_answers)
+    all_correct = len(errors) == 0
+
+    # Record attempt
+    record_attempt(token, exercise_id, user_answers, all_correct,
+                   errors if errors else None,
+                   module=ex["module"], exercise_type="quick_select")
+
+    # Update grammar rule tracking
+    update_grammar_rule(token, ex["module"], ex["topic"], all_correct)
+
+    explanations = []
+    if errors:
+        for err in errors:
+            error_id = log_error(token, exercise_id, err["category"], err["detail"])
+            schedule_retry(token, exercise_id, error_id, days_delay=2)
+            explanations.append(get_error_explanation(err))
+
+    # Build full sentence with correct answers filled in
+    full_sentence = ex["data"]["sentence"]
+    for gap in ex["data"]["gaps"]:
+        full_sentence = full_sentence.replace("{" + gap["position"] + "}", gap["answer"])
+
+    return jsonify({
+        "correct": all_correct,
+        "full_sentence": full_sentence,
+        "grammar_rule": ex.get("grammar_rule", ""),
+        "grammar_tip": ex.get("grammar_tip", ""),
+        "errors": explanations,
+        "gap_results": [{
+            "position": g["position"],
+            "correct_answer": g["answer"],
+            "user_answer": user_answers.get(g["position"], ""),
+            "is_correct": user_answers.get(g["position"], "") == g["answer"],
+            "explanation": g.get("explanation", "")
+        } for g in ex["data"]["gaps"]]
+    })
+
+
 @app.route("/dashboard")
 def dashboard():
     token = get_user_token()
@@ -128,8 +483,20 @@ def dashboard():
     # Enrich recent attempts with sentence info from the bank
     for r in recent:
         tmpl = get_template_by_id(r.get("template_id", ""))
-        r["full_text"] = tmpl["text"] if tmpl else r.get("template_id", "?")
-        r["clause_structure"] = tmpl["clause_type"] if tmpl else ""
+        if tmpl:
+            r["full_text"] = tmpl["text"]
+            r["clause_structure"] = tmpl["clause_type"]
+        else:
+            # Check grammar exercises
+            gex = get_exercise_by_id(r.get("template_id", ""))
+            if gex:
+                r["full_text"] = (gex["data"].get("full_correct")
+                                  or gex["data"].get("correct_order")
+                                  or gex["data"].get("text", r.get("template_id", "?")))
+                r["clause_structure"] = gex.get("topic", "")
+            else:
+                r["full_text"] = r.get("template_id", "?")
+                r["clause_structure"] = ""
 
     return render_template("dashboard.html",
                            error_stats=error_stats,
@@ -138,26 +505,27 @@ def dashboard():
                            summary=summary,
                            saved_words=saved_words)
 
+
 @app.route('/admin/download-db')
 def download_db():
     from flask import send_file
     admin_password = os.environ.get('ADMIN_PASSWORD')
     provided_password = request.args.get('password')
-    
+
     if not admin_password or provided_password != admin_password:
         return "Unauthorized - Invalid password", 401
-    
+
     if os.environ.get('RENDER'):
         db_path = '/data/german_learning.db'
     else:
         db_path = 'german_learning.db'
-    
+
     if not os.path.exists(db_path):
         return "Database not found", 404
-    
+
     return send_file(
-        db_path, 
-        as_attachment=True, 
+        db_path,
+        as_attachment=True,
         download_name=f'german_learning_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
     )
 
@@ -243,9 +611,12 @@ def api_check_answer():
 
     errors = analyze_errors(exercise, verb_user_positions)
 
+    # Determine module from data
+    module = data.get("module", "verb_position")
+
     # Record attempt
     record_attempt(token, template_id, user_positions, all_correct,
-                   errors if errors else None)
+                   errors if errors else None, module=module)
 
     # If retry exercise completed correctly, mark it
     if all_correct and retry_id:
@@ -548,19 +919,21 @@ def mcp_sentence_info():
     return jsonify({
         "total_sentences": len(SENTENCE_BANK),
         "by_difficulty": count_by_difficulty(),
-        "clause_types": list(set(t["clause_type"] for t in SENTENCE_BANK))
+        "clause_types": list(set(t["clause_type"] for t in SENTENCE_BANK)),
+        "grammar_modules": list(GRAMMAR_MODULES.keys()),
+        "grammar_exercise_counts": count_by_module_and_level()
     })
 
 @app.route('/admin/backup-info')
 def backup_info():
     admin_password = os.environ.get('ADMIN_PASSWORD')
     provided_password = request.args.get('password')
-    
+
     if not admin_password or provided_password != admin_password:
         return "Unauthorized", 401
-    
+
     db_path = '/data/german_learning.db' if os.environ.get('RENDER') else 'german_learning.db'
-    
+
     if os.path.exists(db_path):
         stat = os.stat(db_path)
         return {
@@ -569,7 +942,7 @@ def backup_info():
             'last_modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
             'download_url': f'/admin/download-db?password=YOUR_PASSWORD'
         }
-    
+
     return {'database_exists': False}
 
 

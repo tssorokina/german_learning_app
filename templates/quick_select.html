@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ module_name }} — Grammar Torture Chamber{% endblock %}
+
+{% block content %}
+<div class="exercise-container">
+    <div class="exercise-header">
+        <span class="difficulty-badge">{{ difficulty_label }}</span>
+        <span class="clause-badge">{{ module_name }}</span>
+    </div>
+
+    <div class="instruction">
+        <p>Choose the correct option for each gap in the sentence.</p>
+        <p class="instruction-hint" id="grammar-hint"></p>
+    </div>
+
+    <div id="sentence-display" class="sentence-display"></div>
+
+    <div class="action-bar">
+        <button id="btn-check" class="btn btn-primary" disabled>Pr&uuml;fen</button>
+        <button id="btn-reset" class="btn btn-secondary">Reset</button>
+    </div>
+
+    <div id="result-area" class="result-area hidden">
+        <div id="result-icon" class="result-icon"></div>
+        <div id="result-message" class="result-message"></div>
+        <div id="correct-sentence" class="correct-sentence"></div>
+        <div id="explanation-box" class="explanation-box"></div>
+        <div id="error-details" class="error-details"></div>
+        <div class="action-bar">
+            <a href="/grammar/{{ module_key }}" class="btn btn-primary">Next Exercise</a>
+            <a href="/grammar" class="btn btn-secondary">All Modules</a>
+        </div>
+    </div>
+</div>
+
+<script>
+    const EXERCISE_DATA = {{ exercise|safe }};
+</script>
+<script src="{{ url_for('static', filename='js/quick_select.js') }}"></script>
+{% endblock %}

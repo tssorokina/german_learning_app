@@ -1,13 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Verb-End Torture Chamber — Home{% endblock %}
+{% block title %}Grammar Torture Chamber — Home{% endblock %}
 
 {% block content %}
 <div class="hero">
-    <h1>Verb-End<br><span class="accent">Torture Chamber</span></h1>
-    <p class="subtitle">Master German verb placement in subordinate clauses.<br>
-    From A2 to C1 — one Nebensatz at a time.</p>
+    <h1>Grammar<br><span class="accent">Torture Chamber</span></h1>
+    <p class="subtitle">Master German grammar from A2 to C1.<br>
+    Verb placement, adjective endings, passive voice, and more.</p>
 </div>
 
+<!-- ─── VERB POSITION (Original Module) ─── -->
+<h2 class="section-heading">Verbstellung (Original)</h2>
 <div class="level-grid">
     <a href="/exercise?difficulty=1" class="level-card level-a2">
         <div class="level-tag">A2</div>
@@ -29,6 +31,24 @@
         <div class="level-name">Meisterklasse</div>
         <div class="level-desc">Triple nesting, double infinitive, complex stacking</div>
     </a>
+</div>
+
+<!-- ─── NEW GRAMMAR MODULES ─── -->
+<h2 class="section-heading">Grammar Modules</h2>
+<div class="module-grid">
+    {% for key, mod in modules.items() %}
+    {% if key != 'verb_position' %}
+    <a href="/grammar/{{ key }}" class="module-card-compact" style="--module-color: {{ mod.color }}">
+        <span class="module-tag-sm" style="background: {{ mod.color }}">{{ mod.name }}</span>
+        <span class="module-desc-sm">{{ mod.description }}</span>
+        {% if stats_by_module.get(key) %}
+        {% set st = stats_by_module[key] %}
+        {% set acc = (st.correct / st.total * 100)|round|int if st.total > 0 else 0 %}
+        <span class="module-acc-sm">{{ acc }}%</span>
+        {% endif %}
+    </a>
+    {% endif %}
+    {% endfor %}
 </div>
 
 {% if summary.total_attempts > 0 %}
@@ -53,7 +73,8 @@
 {% endif %}
 
 <div class="cta-section">
-    <a href="/exercise" class="btn btn-primary btn-lg">Start Random Exercise</a>
+    <a href="/exercise" class="btn btn-primary btn-lg">Random Verb Exercise</a>
+    <a href="/grammar" class="btn btn-secondary btn-lg">All Grammar Modules</a>
     {% if summary.pending_retries > 0 %}
     <a href="/exercise" class="btn btn-warning">{{ summary.pending_retries }} Retries Waiting</a>
     {% endif %}
