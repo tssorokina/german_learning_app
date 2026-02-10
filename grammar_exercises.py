@@ -13,6 +13,9 @@ Each exercise follows the unified format:
     "grammar_tip": "Mnemonic or practical tip"
 }
 """
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════
 # MODULE 1: Adjective Declension Trainer (A2-B2)
@@ -1566,7 +1569,8 @@ NOMINALISIERUNG_EXERCISES = [
 # ALL EXERCISES combined
 # ═══════════════════════════════════════════════════════════
 
-ALL_GRAMMAR_EXERCISES = (
+# Hardcoded fallback exercises (used when no generated exercises are available)
+_FALLBACK_EXERCISES = (
     ADJECTIVE_EXERCISES +
     KONNEKTOR_EXERCISES +
     PASSIV_EXERCISES +
@@ -1575,6 +1579,32 @@ ALL_GRAMMAR_EXERCISES = (
     PRAEPOSITION_EXERCISES +
     NOMINALISIERUNG_EXERCISES
 )
+
+# Active exercise bank — starts with fallback, replaced by generated exercises
+ALL_GRAMMAR_EXERCISES = list(_FALLBACK_EXERCISES)
+
+
+def load_generated_exercises(generated_exercises):
+    """Replace the exercise bank with generated exercises.
+
+    Args:
+        generated_exercises: list of exercise dicts from generate_exercises.py
+    """
+    global ALL_GRAMMAR_EXERCISES
+    if generated_exercises:
+        # Merge: use generated exercises, keep fallback for any module not generated
+        generated_modules = {e["module"] for e in generated_exercises}
+        # Keep fallback exercises for modules that weren't generated
+        kept_fallback = [e for e in _FALLBACK_EXERCISES
+                         if e["module"] not in generated_modules]
+        ALL_GRAMMAR_EXERCISES = generated_exercises + kept_fallback
+        logger.info(
+            f"Loaded {len(generated_exercises)} generated + "
+            f"{len(kept_fallback)} fallback exercises"
+        )
+    else:
+        ALL_GRAMMAR_EXERCISES = list(_FALLBACK_EXERCISES)
+        logger.info(f"Using {len(ALL_GRAMMAR_EXERCISES)} fallback exercises")
 
 
 def get_exercises_by_module(module, level=None):

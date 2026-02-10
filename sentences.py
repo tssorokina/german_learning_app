@@ -17,6 +17,9 @@ Verb-end rules tested:
 import random
 import hashlib
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ─── SENTENCE TEMPLATES ───────────────────────────────────────────────
 # Each template:
@@ -754,6 +757,20 @@ def prepare_exercise(template):
         "verbs": verbs,
         "positions": verb_positions
     }
+
+
+def load_generated_verb_sentences(generated):
+    """Add generated verb-position sentences to the bank.
+
+    Args:
+        generated: list of sentence dicts with keys: id, text, verbs,
+                   clause_type, difficulty, explanation
+    """
+    if generated:
+        # Add generated sentences alongside the hardcoded ones
+        SENTENCE_BANK.extend(generated)
+        logger.info(f"Added {len(generated)} generated verb-position sentences "
+                    f"(total: {len(SENTENCE_BANK)})")
 
 
 def get_exercise_by_difficulty(difficulty=None, exclude_ids=None):

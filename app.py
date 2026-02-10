@@ -15,6 +15,7 @@ import os
 import json
 import random
 import secrets
+import logging
 from datetime import date, datetime
 from functools import wraps
 
@@ -30,19 +31,39 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       update_grammar_rule, get_module_stats)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
-                       count_by_difficulty)
+                       count_by_difficulty, load_generated_verb_sentences)
 from error_analyzer import (analyze_errors, analyze_gap_fill_errors,
                             analyze_quick_select_errors, get_error_explanation,
                             get_all_categories, ERROR_CATEGORIES)
 from exercise_types import GRAMMAR_MODULES, EXERCISE_TYPES
 from grammar_exercises import (get_exercises_by_module, get_exercise_by_id,
-                               count_by_module_and_level, ALL_GRAMMAR_EXERCISES)
+                               count_by_module_and_level, ALL_GRAMMAR_EXERCISES,
+                               load_generated_exercises)
+from generate_exercises import refresh_exercise_banks
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 # Auth token for API / notification endpoints
 API_TOKEN = os.environ.get("API_TOKEN", secrets.token_hex(16))
+
+# ─── EXERCISE GENERATION ON STARTUP ─────────────────────────────────
+logging.basicConfig(level=logging.INFO)
+
+def _init_exercises():
+    """Generate or load exercises from cache on startup."""
+    try:
+        verb_sentences, grammar_exs = refresh_exercise_banks()
+        if verb_sentences:
+            load_generated_verb_sentences(verb_sentences)
+        if grammar_exs:
+            load_generated_exercises(grammar_exs)
+    except Exception as e:
+        logger.error(f"Exercise generation failed, using fallback: {e}")
+
+_init_exercises()
 
 
 def get_user_token():
@@ -566,7 +587,19 @@ def api_check_answer():
 
     template = get_template_by_id(template_id)
     if not template:
-        return jsonify({"error": "unknown sentence"}), 404
+        # Check grammar exercises (konnektoren, konjunktiv, relativ use reconstruction)
+        grammar_ex = get_exercise_by_id(template_id)
+        if grammar_ex and grammar_ex["type"] == "reconstruction":
+            template = {
+                "id": grammar_ex["id"],
+                "text": grammar_ex["data"]["text"],
+                "verbs": grammar_ex["data"]["verbs"],
+                "clause_type": grammar_ex["data"]["clause_type"],
+                "difficulty": grammar_ex["level"],
+                "explanation": grammar_ex["grammar_rule"]
+            }
+        else:
+            return jsonify({"error": "unknown sentence"}), 404
 
     exercise = prepare_exercise(template)
 
@@ -616,7 +649,15 @@ def api_check_answer():
 
     # Record attempt
     record_attempt(token, template_id, user_positions, all_correct,
-                   errors if errors else None, module=module)
+                   errors if errors else None, module=module,
+                   exercise_type="reconstruction")
+
+    # Update grammar rule tracking for grammar module exercises
+    if module != "verb_position":
+        grammar_ex = get_exercise_by_id(template_id)
+        if grammar_ex:
+            update_grammar_rule(token, module,
+                                grammar_ex.get("topic", template_id), all_correct)
 
     # If retry exercise completed correctly, mark it
     if all_correct and retry_id:
@@ -630,13 +671,22 @@ def api_check_answer():
             schedule_retry(token, template_id, error_id, days_delay=2)
             explanations.append(get_error_explanation(err))
 
-    return jsonify({
+    # Build response with grammar_rule for consistency with other exercise types
+    response = {
         "correct": all_correct,
         "full_sentence": exercise["full_text"],
         "explanation": exercise["explanation"],
         "errors": explanations,
         "slot_results": slot_results
-    })
+    }
+    # Add grammar_rule/grammar_tip for grammar module exercises
+    if module != "verb_position":
+        grammar_ex = get_exercise_by_id(template_id)
+        if grammar_ex:
+            response["grammar_rule"] = grammar_ex.get("grammar_rule", "")
+            response["grammar_tip"] = grammar_ex.get("grammar_tip", "")
+
+    return jsonify(response)
 
 
 @app.route("/api/stats", methods=["GET"])
@@ -647,6 +697,25 @@ def api_stats():
         "error_categories": get_error_stats(token),
         "accuracy_over_time": get_accuracy_over_time(token)
     })
+
+
+@app.route("/api/regenerate", methods=["POST"])
+@require_api_token
+def api_regenerate_exercises():
+    """Regenerate all exercises using Claude API. Requires API_TOKEN auth."""
+    try:
+        verb_sentences, grammar_exs = refresh_exercise_banks()
+        if verb_sentences:
+            load_generated_verb_sentences(verb_sentences)
+        if grammar_exs:
+            load_generated_exercises(grammar_exs)
+        return jsonify({
+            "success": True,
+            "verb_position_count": len(verb_sentences),
+            "grammar_exercise_count": len(grammar_exs)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─── DUDEN LOOKUP ─────────────────────────────────────────────────────
