@@ -15,6 +15,7 @@ import os
 import json
 import random
 import secrets
+import logging
 from datetime import date, datetime
 from functools import wraps
 
@@ -30,19 +31,39 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       update_grammar_rule, get_module_stats)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
-                       count_by_difficulty)
+                       count_by_difficulty, load_generated_verb_sentences)
 from error_analyzer import (analyze_errors, analyze_gap_fill_errors,
                             analyze_quick_select_errors, get_error_explanation,
                             get_all_categories, ERROR_CATEGORIES)
 from exercise_types import GRAMMAR_MODULES, EXERCISE_TYPES
 from grammar_exercises import (get_exercises_by_module, get_exercise_by_id,
-                               count_by_module_and_level, ALL_GRAMMAR_EXERCISES)
+                               count_by_module_and_level, ALL_GRAMMAR_EXERCISES,
+                               load_generated_exercises)
+from generate_exercises import refresh_exercise_banks
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 # Auth token for API / notification endpoints
 API_TOKEN = os.environ.get("API_TOKEN", secrets.token_hex(16))
+
+# ─── EXERCISE GENERATION ON STARTUP ─────────────────────────────────
+logging.basicConfig(level=logging.INFO)
+
+def _init_exercises():
+    """Generate or load exercises from cache on startup."""
+    try:
+        verb_sentences, grammar_exs = refresh_exercise_banks()
+        if verb_sentences:
+            load_generated_verb_sentences(verb_sentences)
+        if grammar_exs:
+            load_generated_exercises(grammar_exs)
+    except Exception as e:
+        logger.error(f"Exercise generation failed, using fallback: {e}")
+
+_init_exercises()
 
 
 def get_user_token():
@@ -676,6 +697,25 @@ def api_stats():
         "error_categories": get_error_stats(token),
         "accuracy_over_time": get_accuracy_over_time(token)
     })
+
+
+@app.route("/api/regenerate", methods=["POST"])
+@require_api_token
+def api_regenerate_exercises():
+    """Regenerate all exercises using Claude API. Requires API_TOKEN auth."""
+    try:
+        verb_sentences, grammar_exs = refresh_exercise_banks()
+        if verb_sentences:
+            load_generated_verb_sentences(verb_sentences)
+        if grammar_exs:
+            load_generated_exercises(grammar_exs)
+        return jsonify({
+            "success": True,
+            "verb_position_count": len(verb_sentences),
+            "grammar_exercise_count": len(grammar_exs)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─── DUDEN LOOKUP ─────────────────────────────────────────────────────
