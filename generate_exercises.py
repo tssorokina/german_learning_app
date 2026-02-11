@@ -3,6 +3,8 @@ Dynamic exercise generation using Claude API.
 
 On app startup, calls Claude to generate 20 fresh exercises per module.
 Falls back to cached exercises (JSON file) if the API key is missing or the call fails.
+If no cache is available either, falls back to the hardcoded exercise banks
+in the exercises/ package.
 """
 
 import os
@@ -12,6 +14,17 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Lazy import to avoid circular imports — loaded on first use
+_exercise_bank_cache = None
+
+def _get_exercise_banks():
+    """Lazily load the hardcoded exercise banks from the exercises/ package."""
+    global _exercise_bank_cache
+    if _exercise_bank_cache is None:
+        from exercises import ALL_EXERCISE_BANKS
+        _exercise_bank_cache = ALL_EXERCISE_BANKS
+    return _exercise_bank_cache
 
 # Where to cache generated exercises
 CACHE_DIR = Path(os.environ.get("DATA_DIR", ".")) / "generated"
@@ -476,8 +489,35 @@ def _call_claude(prompt, api_key):
 
     return json.loads(response_text)
 
+def _call_openai(prompt, api_key):
+    """Call OpenAI API and return parsed JSON."""
+    from openai import OpenAI
 
-def generate_module_exercises(module_key, api_key, count=EXERCISES_PER_MODULE):
+    # client = OpenAI(api_key=api_key)
+
+    # message = client.chat.completions.create(
+    #     model="gpt-4o",
+    #     max_tokens=8000,
+    #     messages=[{"role": "user", "content": prompt}]
+    # )
+
+    # response_text = message.choices[0].message.content.strip()
+
+    # # Strip markdown code fences if present
+    # if response_text.startswith("```"):
+    #     lines = response_text.split("\n")
+    #     lines = lines[1:]  # Remove opening fence
+    #     if lines and lines[-1].strip() == "```":
+    #         lines = lines[:-1]  # Remove closing fence
+    #     response_text = "\n".join(lines)
+
+    # return json.loads(response_text)
+    # print(prompt)
+    # print('\n' + '-'*50 + '\n')
+    return []  # TODO: implement actual OpenAI call
+
+
+def generate_module_exercises(module_key, api_key, key_type='CLAUDE', count=EXERCISES_PER_MODULE):
     """Generate exercises for a single module using Claude API."""
     prompt_template = MODULE_PROMPTS.get(module_key)
     if not prompt_template:
@@ -486,14 +526,22 @@ def generate_module_exercises(module_key, api_key, count=EXERCISES_PER_MODULE):
 
     prompt = prompt_template.format(count=count, n=1)
 
-    try:
-        exercises = _call_claude(prompt, api_key)
-    except Exception as e:
-        logger.error(f"Claude API call failed for {module_key}: {e}")
-        return []
+    
+    if key_type == 'CLAUDE':
+        try:
+            exercises = _call_claude(prompt, api_key)
+        except Exception as e:
+            logger.error(f"Claude API call failed for {module_key}: {e}")
+            return []
+    elif key_type == 'OPENAI':
+        try:
+            exercises = _call_openai(prompt, api_key)
+        except Exception as e:
+            logger.error(f"OpenAI API call failed for {module_key}: {e}")
+            return []
 
     if not isinstance(exercises, list):
-        logger.error(f"Expected list from Claude for {module_key}, got {type(exercises)}")
+        logger.error(f"Expected list from API call for {module_key}, got {type(exercises)}")
         return []
 
     # Validate exercises
@@ -521,20 +569,45 @@ def generate_module_exercises(module_key, api_key, count=EXERCISES_PER_MODULE):
     return valid
 
 
+def _fallback_to_bank():
+    """Fall back to the hardcoded exercise banks from the exercises/ package.
+
+    Returns a dict of module_key -> exercise list, matching the format
+    that generate_all_exercises() normally returns.
+    """
+    banks = _get_exercise_banks()
+    result = {}
+    for module_key, exercises in banks.items():
+        if exercises:
+            result[module_key] = list(exercises)
+    total = sum(len(v) for v in result.values())
+    logger.info(f"Falling back to hardcoded exercise bank: {total} exercises across {len(result)} modules")
+    return result
+
+
 def generate_all_exercises(api_key=None):
-    """Generate exercises for all modules. Returns dict of module_key -> exercise list."""
+    """Generate exercises for all modules. Returns dict of module_key -> exercise list.
+
+    Fallback chain:
+    1. API generation (Claude or OpenAI)
+    2. Cached exercises (JSON file)
+    3. Hardcoded exercise bank (exercises/ package)
+    """
     if not api_key:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY") if 'OPENAI_API_KEY' in os.environ else os.environ.get("ANTHROPIC_API_KEY")
 
     if not api_key:
-        logger.warning("No ANTHROPIC_API_KEY set — skipping generation, using cache")
-        return load_cache()
+        logger.warning("No API key set — skipping generation, trying cache then bank")
+        cached = load_cache()
+        if cached:
+            return cached
+        return _fallback_to_bank()
 
     all_exercises = {}
 
     for module_key in MODULE_PROMPTS:
         logger.info(f"Generating exercises for {module_key}...")
-        exercises = generate_module_exercises(module_key, api_key)
+        exercises = generate_module_exercises(module_key, api_key, key_type='OPENAI' if 'OPENAI_API_KEY' in os.environ else 'CLAUDE')
         if exercises:
             all_exercises[module_key] = exercises
         else:
@@ -544,6 +617,13 @@ def generate_all_exercises(api_key=None):
 
     if all_exercises:
         save_cache(all_exercises)
+    else:
+        # API generation failed for all modules — try cache, then bank
+        logger.warning("API generation produced no exercises — trying cache then bank")
+        cached = load_cache()
+        if cached:
+            return cached
+        return _fallback_to_bank()
 
     return all_exercises
 
@@ -584,6 +664,9 @@ def refresh_exercise_banks():
     Returns (verb_position_sentences, grammar_exercises) tuple.
     - verb_position_sentences: list of sentence-bank-format dicts for sentences.py
     - grammar_exercises: list of grammar-exercise-format dicts for grammar_exercises.py
+
+    The fallback chain (API -> cache -> hardcoded bank) is handled by
+    generate_all_exercises(), so this function always returns usable data.
     """
     generated = generate_all_exercises()
 

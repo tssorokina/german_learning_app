@@ -18,6 +18,10 @@ import secrets
 import logging
 from datetime import date, datetime
 from functools import wraps
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from flask import (Flask, render_template, request, jsonify, session,
                    redirect, url_for, abort)

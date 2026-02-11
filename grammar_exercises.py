@@ -12,8 +12,17 @@ Each exercise follows the unified format:
     "grammar_rule": "Human-readable rule explanation",
     "grammar_tip": "Mnemonic or practical tip"
 }
+
+Exercise data is organized across two sources:
+1. The inline banks below (adj_001, kon_001, etc.) — original handcrafted exercises
+2. The exercises/ package (gen_adj_001, gen_kon_001, etc.) — extracted from the
+   monolithic sentences.py into per-module files
+
+Both sources are merged into ALL_GRAMMAR_EXERCISES at startup.
 """
 import logging
+
+from exercises import GRAMMAR_EXERCISE_BANKS
 
 logger = logging.getLogger(__name__)
 
@@ -1569,8 +1578,8 @@ NOMINALISIERUNG_EXERCISES = [
 # ALL EXERCISES combined
 # ═══════════════════════════════════════════════════════════
 
-# Hardcoded fallback exercises (used when no generated exercises are available)
-_FALLBACK_EXERCISES = (
+# Inline fallback exercises (the adj_001, kon_001, etc. defined above)
+_INLINE_EXERCISES = (
     ADJECTIVE_EXERCISES +
     KONNEKTOR_EXERCISES +
     PASSIV_EXERCISES +
@@ -1578,6 +1587,24 @@ _FALLBACK_EXERCISES = (
     RELATIV_EXERCISES +
     PRAEPOSITION_EXERCISES +
     NOMINALISIERUNG_EXERCISES
+)
+
+# Exercises from the exercises/ package (gen_adj_001, gen_kon_001, etc.)
+_PACKAGE_EXERCISES = []
+for _bank in GRAMMAR_EXERCISE_BANKS.values():
+    _PACKAGE_EXERCISES.extend(_bank)
+
+# Merge both sets — collect IDs to avoid duplicates
+_seen_ids = set()
+_FALLBACK_EXERCISES = []
+for _ex in _INLINE_EXERCISES + _PACKAGE_EXERCISES:
+    if _ex["id"] not in _seen_ids:
+        _seen_ids.add(_ex["id"])
+        _FALLBACK_EXERCISES.append(_ex)
+
+logger.info(
+    f"Merged exercise banks: {len(_INLINE_EXERCISES)} inline + "
+    f"{len(_PACKAGE_EXERCISES)} from package = {len(_FALLBACK_EXERCISES)} unique fallback exercises"
 )
 
 # Active exercise bank — starts with fallback, replaced by generated exercises
