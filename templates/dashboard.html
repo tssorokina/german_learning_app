@@ -4,7 +4,35 @@
 {% block content %}
 <h1 class="page-title">Dashboard</h1>
 
+<!-- ─── LEARNING QUALITY METRICS ──────────────────── -->
 <div class="stats-bar">
+    <div class="stat">
+        <div class="stat-value">{{ retention['24h'] if retention['24h'] is not none else '--' }}{% if retention['24h'] is not none %}%{% endif %}</div>
+        <div class="stat-label">24h Retention</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ retention['7d'] if retention['7d'] is not none else '--' }}{% if retention['7d'] is not none %}%{% endif %}</div>
+        <div class="stat-label">7d Retention</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{% if transfer_scores and transfer_scores.get('near') %}{{ transfer_scores['near']['accuracy'] }}%{% else %}--{% endif %}</div>
+        <div class="stat-label">Transfer Score</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{{ fluency if fluency is not none else '--' }}{% if fluency is not none %}%{% endif %}</div>
+        <div class="stat-label">Fluency</div>
+    </div>
+</div>
+
+<div class="stats-bar stats-secondary">
+    <div class="stat">
+        <div class="stat-value">{{ scaffold.gap }}pp</div>
+        <div class="stat-label">Scaffold Gap</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value">{% if calibration %}{{ calibration.calibration_score }}%{% else %}--{% endif %}</div>
+        <div class="stat-label">Confidence Cal.</div>
+    </div>
     <div class="stat">
         <div class="stat-value">{{ summary.total_attempts }}</div>
         <div class="stat-label">Total Attempts</div>
@@ -13,15 +41,62 @@
         <div class="stat-value">{{ summary.accuracy }}%</div>
         <div class="stat-label">Accuracy</div>
     </div>
-    <div class="stat">
-        <div class="stat-value">{{ summary.current_streak }}</div>
-        <div class="stat-label">Current Streak</div>
-    </div>
-    <div class="stat">
-        <div class="stat-value">{{ summary.pending_retries }}</div>
-        <div class="stat-label">Pending Retries</div>
-    </div>
 </div>
+
+<!-- ─── TRANSFER PROGRESS ──────────────────────────── -->
+{% if transfer_progress %}
+<section class="dashboard-section">
+    <h2>Transfer Progress</h2>
+    <div class="transfer-grid">
+        {% for tp in transfer_progress %}
+        <div class="transfer-card">
+            <div class="transfer-card-header">{{ tp.module }} / {{ tp.rule_id }}</div>
+            <div class="transfer-stages">
+                {% set stages = ['controlled', 'near', 'far', 'delayed'] %}
+                {% for stage in stages %}
+                <div class="transfer-stage {% if tp.current_stage == stage %}stage-active{% elif stages.index(stage) < stages.index(tp.current_stage) %}stage-done{% endif %}">
+                    <div class="stage-dot"></div>
+                    <div class="stage-label">{{ stage|capitalize }}</div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="transfer-detail">
+                {% if tp.current_stage == 'controlled' %}
+                    {{ tp.controlled_correct }}/3 correct
+                {% elif tp.current_stage == 'near' %}
+                    {{ tp.near_correct }}/2 correct
+                {% elif tp.current_stage == 'far' %}
+                    {{ tp.far_completed }}/1 completed
+                {% else %}
+                    {{ tp.delayed_correct }} reviewed
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<!-- ─── CONFIDENCE CALIBRATION ──────────────────────── -->
+{% if calibration %}
+<section class="dashboard-section">
+    <h2>Confidence Calibration</h2>
+    <div class="calibration-grid">
+        <div class="calibration-cell">
+            <div class="calibration-value good">{{ (100 - calibration.overconfidence_pct - calibration.underconfidence_pct)|round(1) }}%</div>
+            <div class="calibration-label">Correctly Calibrated</div>
+        </div>
+        <div class="calibration-cell">
+            <div class="calibration-value warn">{{ calibration.overconfidence_pct }}%</div>
+            <div class="calibration-label">Overconfident</div>
+        </div>
+        <div class="calibration-cell">
+            <div class="calibration-value info">{{ calibration.underconfidence_pct }}%</div>
+            <div class="calibration-label">Underconfident</div>
+        </div>
+    </div>
+</section>
+{% endif %}
 
 <!-- ─── SAVED WORDS ──────────────────────────────── -->
 <section class="saved-words-section">

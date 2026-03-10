@@ -1106,3 +1106,321 @@ body {
         font-size: 0.9rem;
     }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   ADAPTIVE LEARNING — Context Banners, Micro-Curricula,
+   Transfer Progress, Enhanced Dashboard
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── CONTEXT BANNERS ──────────────────────────── */
+.context-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 12px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+.context-label {
+    flex: 1;
+}
+.context-skip {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    text-decoration: underline;
+}
+.micro-curriculum-banner {
+    background: #6366f120;
+    border: 1px solid #6366f140;
+    color: #a5b4fc;
+}
+.confusion-banner {
+    background: #f59e0b18;
+    border: 1px solid #f59e0b30;
+    color: #fcd34d;
+}
+.review-banner {
+    background: #4ade8018;
+    border: 1px solid #4ade8030;
+    color: #86efac;
+}
+.transfer-banner {
+    background: #f472b618;
+    border: 1px solid #f472b630;
+    color: #f9a8d4;
+}
+
+/* ─── MICRO-CURRICULUM STEPS ───────────────────── */
+.micro-progress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: var(--surface2);
+    border-radius: var(--radius-sm);
+}
+.micro-progress-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+.micro-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.micro-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+.micro-progress-text {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.micro-step-content {
+    margin: 16px 0;
+}
+.micro-instruction {
+    font-size: 1rem;
+    font-weight: 500;
+    margin-bottom: 16px;
+    color: var(--text);
+}
+.micro-badge {
+    background: var(--accent) !important;
+}
+
+/* Minimal pairs */
+.minimal-pairs {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.minimal-pair-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+}
+.pair-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+}
+.pair-row.pair-correct {
+    color: var(--success);
+}
+.pair-row.pair-incorrect {
+    color: var(--error);
+    opacity: 0.7;
+}
+.pair-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+.pair-text {
+    flex: 1;
+    font-size: 0.95rem;
+}
+.pair-connector {
+    font-weight: 700;
+    color: var(--accent);
+    min-width: 80px;
+}
+.pair-tag {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.tag-inversion {
+    background: #f59e0b30;
+    color: #fcd34d;
+}
+.tag-no-inversion {
+    background: #4ade8020;
+    color: #86efac;
+}
+.pair-rule {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    font-style: italic;
+}
+
+/* Grammar matrices */
+.matrix-wrapper {
+    overflow-x: auto;
+    margin-bottom: 16px;
+}
+.matrix-title {
+    font-size: 0.95rem;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+}
+.grammar-matrix {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+.grammar-matrix th,
+.grammar-matrix td {
+    padding: 8px 12px;
+    text-align: center;
+    border: 1px solid var(--border);
+}
+.grammar-matrix thead th {
+    background: var(--surface);
+    color: var(--accent);
+    font-weight: 600;
+}
+.grammar-matrix tbody th {
+    background: var(--surface);
+    color: var(--text-dim);
+    font-weight: 500;
+    text-align: left;
+}
+.grammar-matrix td {
+    background: var(--surface2);
+    color: var(--text);
+    font-weight: 500;
+}
+
+/* Far transfer */
+.far-transfer-prompt {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+}
+.prompt-text {
+    font-size: 1.05rem;
+    line-height: 1.6;
+    margin-bottom: 12px;
+}
+.prompt-hint {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+/* ─── ENHANCED DASHBOARD ───────────────────────── */
+.stats-secondary {
+    margin-top: -4px;
+    opacity: 0.85;
+}
+.stats-secondary .stat-value {
+    font-size: 1.2rem;
+}
+
+/* Transfer progress cards */
+.transfer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+}
+.transfer-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+}
+.transfer-card-header {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: var(--text);
+}
+.transfer-stages {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.transfer-stage {
+    flex: 1;
+    text-align: center;
+}
+.stage-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--border);
+    margin: 0 auto 4px;
+    transition: background 0.3s;
+}
+.stage-active .stage-dot {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent-glow);
+}
+.stage-done .stage-dot {
+    background: var(--success);
+}
+.stage-label {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}
+.stage-active .stage-label {
+    color: var(--accent);
+    font-weight: 600;
+}
+.transfer-detail {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-align: center;
+}
+
+/* Confidence calibration */
+.calibration-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+.calibration-cell {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    text-align: center;
+}
+.calibration-value {
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.calibration-value.good { color: var(--success); }
+.calibration-value.warn { color: var(--warning); }
+.calibration-value.info { color: var(--a2); }
+.calibration-label {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+
+/* Responsive adjustments for new components */
+@media (max-width: 600px) {
+    .calibration-grid {
+        grid-template-columns: 1fr;
+    }
+    .transfer-grid {
+        grid-template-columns: 1fr;
+    }
+    .micro-progress {
+        flex-wrap: wrap;
+    }
+    .micro-progress-label {
+        width: 100%;
+        margin-bottom: 4px;
+    }
+}

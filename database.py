@@ -2,7 +2,7 @@
 import sqlite3
 import os
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 DB_PATH = os.environ.get("DB_PATH", "german_app.db")
 
@@ -91,6 +91,60 @@ def init_db():
             next_review TIMESTAMP,
             UNIQUE(user_token, rule_id)
         );
+
+        CREATE TABLE IF NOT EXISTS micro_curriculum_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            error_category TEXT NOT NULL,
+            source_error_id INTEGER,
+            source_exercise_id TEXT,
+            curriculum_key TEXT NOT NULL,
+            total_steps INTEGER NOT NULL,
+            current_step INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active',
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS transfer_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            module TEXT NOT NULL,
+            rule_id TEXT NOT NULL,
+            current_stage TEXT DEFAULT 'controlled',
+            controlled_correct INTEGER DEFAULT 0,
+            controlled_total INTEGER DEFAULT 0,
+            near_correct INTEGER DEFAULT 0,
+            near_total INTEGER DEFAULT 0,
+            far_completed INTEGER DEFAULT 0,
+            delayed_correct INTEGER DEFAULT 0,
+            delayed_total INTEGER DEFAULT 0,
+            last_stage_change TIMESTAMP,
+            next_delayed_review TIMESTAMP,
+            UNIQUE(user_token, rule_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS exercise_timing (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            attempt_id INTEGER,
+            template_id TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            input_mode TEXT,
+            predicted_correct INTEGER,
+            actual_correct INTEGER,
+            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS confusion_set_state (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            confusion_set_key TEXT NOT NULL,
+            times_tested INTEGER DEFAULT 0,
+            discrimination_correct INTEGER DEFAULT 0,
+            last_tested TIMESTAMP,
+            UNIQUE(user_token, confusion_set_key)
+        );
     """)
 
     # Add module and exercise_type columns to attempts if missing
@@ -99,6 +153,18 @@ def init_db():
     except Exception:
         conn.execute("ALTER TABLE attempts ADD COLUMN module TEXT DEFAULT 'verb_position'")
         conn.execute("ALTER TABLE attempts ADD COLUMN exercise_type TEXT DEFAULT 'reconstruction'")
+
+    # Add transfer/timing/curriculum columns to attempts
+    for col, defn in [
+        ("transfer_stage", "TEXT"),
+        ("duration_ms", "INTEGER"),
+        ("input_mode", "TEXT"),
+        ("micro_curriculum_session_id", "INTEGER"),
+    ]:
+        try:
+            conn.execute(f"SELECT {col} FROM attempts LIMIT 1")
+        except Exception:
+            conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {defn}")
 
     conn.commit()
     conn.close()
@@ -151,17 +217,22 @@ def mark_sentence_shown(user_token, template_id):
 
 
 def record_attempt(user_token, template_id, user_positions, correct, errors=None,
-                   module="verb_position", exercise_type="reconstruction"):
+                   module="verb_position", exercise_type="reconstruction",
+                   transfer_stage=None, duration_ms=None, input_mode=None,
+                   micro_curriculum_session_id=None):
     conn = get_db()
-    conn.execute(
+    cur = conn.execute(
         """INSERT INTO attempts (user_token, template_id, user_positions_json, correct, errors_json,
-           module, exercise_type)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           module, exercise_type, transfer_stage, duration_ms, input_mode, micro_curriculum_session_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (user_token, template_id, json.dumps(user_positions), 1 if correct else 0,
-         json.dumps(errors) if errors else None, module, exercise_type)
+         json.dumps(errors) if errors else None, module, exercise_type,
+         transfer_stage, duration_ms, input_mode, micro_curriculum_session_id)
     )
+    attempt_id = cur.lastrowid
     conn.commit()
     conn.close()
+    return attempt_id
 
 
 def log_error(user_token, template_id, error_category, error_detail=None):
@@ -420,5 +491,353 @@ def get_module_stats(user_token):
         WHERE user_token = ?
         GROUP BY module, exercise_type
     """, (user_token,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ─── MICRO-CURRICULUM SESSIONS ───────────────────────────────────────
+
+def get_active_micro_session(user_token):
+    """Get the active micro-curriculum session for a user."""
+    conn = get_db()
+    row = conn.execute("""
+        SELECT * FROM micro_curriculum_sessions
+        WHERE user_token = ? AND status = 'active'
+        ORDER BY started_at DESC LIMIT 1
+    """, (user_token,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_micro_session(user_token, error_category, source_error_id,
+                         source_exercise_id, curriculum_key, total_steps):
+    """Create a new micro-curriculum session. Returns session_id."""
+    conn = get_db()
+    cur = conn.execute("""
+        INSERT INTO micro_curriculum_sessions
+        (user_token, error_category, source_error_id, source_exercise_id,
+         curriculum_key, total_steps)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (user_token, error_category, source_error_id,
+          source_exercise_id, curriculum_key, total_steps))
+    session_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return session_id
+
+
+def advance_micro_session(session_id):
+    """Advance to the next step. Mark completed if all steps done."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT current_step, total_steps FROM micro_curriculum_sessions WHERE id = ?",
+        (session_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    next_step = row["current_step"] + 1
+    if next_step >= row["total_steps"]:
+        conn.execute("""
+            UPDATE micro_curriculum_sessions
+            SET current_step = ?, status = 'completed', completed_at = ?
+            WHERE id = ?
+        """, (next_step, datetime.now().isoformat(), session_id))
+    else:
+        conn.execute(
+            "UPDATE micro_curriculum_sessions SET current_step = ? WHERE id = ?",
+            (next_step, session_id)
+        )
+    conn.commit()
+    conn.close()
+    return "completed" if next_step >= row["total_steps"] else "advanced"
+
+
+def abandon_micro_session(session_id):
+    """Abandon a micro-curriculum session."""
+    conn = get_db()
+    conn.execute(
+        "UPDATE micro_curriculum_sessions SET status = 'abandoned' WHERE id = ?",
+        (session_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+# ─── EXERCISE TIMING ─────────────────────────────────────────────────
+
+def record_exercise_timing(user_token, attempt_id, template_id, duration_ms,
+                           input_mode=None, predicted_correct=None, actual_correct=None):
+    """Record timing and confidence data for an exercise attempt."""
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO exercise_timing
+        (user_token, attempt_id, template_id, duration_ms,
+         input_mode, predicted_correct, actual_correct)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_token, attempt_id, template_id, duration_ms,
+          input_mode, predicted_correct, actual_correct))
+    conn.commit()
+    conn.close()
+
+
+# ─── TRANSFER PROGRESS ───────────────────────────────────────────────
+
+def get_transfer_progress(user_token, rule_id):
+    """Get transfer progress for a specific grammar rule."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM transfer_progress WHERE user_token = ? AND rule_id = ?",
+        (user_token, rule_id)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_transfer_progress(user_token, module, rule_id, stage, was_correct):
+    """Update transfer progress for a grammar rule at a specific stage."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM transfer_progress WHERE user_token = ? AND rule_id = ?",
+        (user_token, rule_id)
+    ).fetchone()
+
+    if row:
+        row = dict(row)
+        total_col = f"{stage}_total"
+        correct_col = f"{stage}_correct"
+        if stage == "far":
+            conn.execute("""
+                UPDATE transfer_progress SET far_completed = far_completed + 1
+                WHERE user_token = ? AND rule_id = ?
+            """, (user_token, rule_id))
+        else:
+            conn.execute(f"""
+                UPDATE transfer_progress
+                SET {total_col} = {total_col} + 1,
+                    {correct_col} = {correct_col} + ?
+                WHERE user_token = ? AND rule_id = ?
+            """, (1 if was_correct else 0, user_token, rule_id))
+    else:
+        total_val = 1
+        correct_val = 1 if was_correct else 0
+        conn.execute("""
+            INSERT INTO transfer_progress
+            (user_token, module, rule_id, current_stage,
+             controlled_correct, controlled_total)
+            VALUES (?, ?, ?, 'controlled', ?, ?)
+        """, (user_token, module, rule_id, correct_val, total_val))
+
+    conn.commit()
+    conn.close()
+
+
+def promote_transfer_stage(user_token, rule_id, new_stage):
+    """Promote a user to the next transfer stage for a rule."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    delayed_review = None
+    if new_stage == "delayed":
+        delayed_review = (datetime.now() + timedelta(days=7)).isoformat()
+
+    conn.execute("""
+        UPDATE transfer_progress
+        SET current_stage = ?, last_stage_change = ?, next_delayed_review = ?
+        WHERE user_token = ? AND rule_id = ?
+    """, (new_stage, now, delayed_review, user_token, rule_id))
+    conn.commit()
+    conn.close()
+
+
+# ─── CONFUSION SET STATE ─────────────────────────────────────────────
+
+def update_confusion_set_state(user_token, confusion_set_key, was_correct):
+    """Update discrimination accuracy for a confusion set."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    row = conn.execute(
+        "SELECT * FROM confusion_set_state WHERE user_token = ? AND confusion_set_key = ?",
+        (user_token, confusion_set_key)
+    ).fetchone()
+
+    if row:
+        conn.execute("""
+            UPDATE confusion_set_state
+            SET times_tested = times_tested + 1,
+                discrimination_correct = discrimination_correct + ?,
+                last_tested = ?
+            WHERE user_token = ? AND confusion_set_key = ?
+        """, (1 if was_correct else 0, now, user_token, confusion_set_key))
+    else:
+        conn.execute("""
+            INSERT INTO confusion_set_state
+            (user_token, confusion_set_key, times_tested, discrimination_correct, last_tested)
+            VALUES (?, ?, 1, ?, ?)
+        """, (user_token, confusion_set_key, 1 if was_correct else 0, now))
+
+    conn.commit()
+    conn.close()
+
+
+def get_confusion_set_states(user_token):
+    """Get all confusion set states for a user."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM confusion_set_state WHERE user_token = ?",
+        (user_token,)
+    ).fetchall()
+    conn.close()
+    return {r["confusion_set_key"]: dict(r) for r in rows}
+
+
+# ─── ENHANCED DASHBOARD METRICS ──────────────────────────────────────
+
+def get_delayed_retention(user_token):
+    """Accuracy on exercises re-attempted after 24h/7d/30d delays."""
+    conn = get_db()
+    results = {}
+    for label, min_hours, max_hours in [("24h", 20, 48), ("7d", 144, 216), ("30d", 648, 792)]:
+        row = conn.execute("""
+            SELECT COUNT(*) as total, SUM(a2.correct) as correct_count
+            FROM attempts a1
+            JOIN attempts a2 ON a1.user_token = a2.user_token
+                AND a1.template_id = a2.template_id
+                AND a2.id > a1.id
+                AND a2.attempted_at > datetime(a1.attempted_at, '+' || ? || ' hours')
+                AND a2.attempted_at < datetime(a1.attempted_at, '+' || ? || ' hours')
+            WHERE a1.user_token = ? AND a1.correct = 1
+        """, (min_hours, max_hours, user_token)).fetchone()
+        total = row["total"] or 0
+        correct = row["correct_count"] or 0
+        results[label] = round(correct / total * 100, 1) if total > 0 else None
+    conn.close()
+    return results
+
+
+def get_transfer_scores(user_token):
+    """Performance breakdown by transfer stage."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT transfer_stage,
+               COUNT(*) as total,
+               SUM(correct) as correct_count
+        FROM attempts
+        WHERE user_token = ? AND transfer_stage IS NOT NULL
+        GROUP BY transfer_stage
+    """, (user_token,)).fetchall()
+    conn.close()
+    return {r["transfer_stage"]: {
+        "total": r["total"],
+        "correct": r["correct_count"] or 0,
+        "accuracy": round((r["correct_count"] or 0) / r["total"] * 100, 1) if r["total"] > 0 else 0
+    } for r in rows}
+
+
+def get_fluency_score(user_token):
+    """Accuracy when response time is below median (speed + accuracy)."""
+    conn = get_db()
+    count_row = conn.execute(
+        "SELECT COUNT(*) as c FROM exercise_timing WHERE user_token = ?",
+        (user_token,)
+    ).fetchone()
+    total_count = count_row["c"]
+    if total_count < 4:
+        conn.close()
+        return None
+
+    median_row = conn.execute("""
+        SELECT duration_ms FROM exercise_timing
+        WHERE user_token = ?
+        ORDER BY duration_ms
+        LIMIT 1 OFFSET ?
+    """, (user_token, total_count // 2)).fetchone()
+    if not median_row:
+        conn.close()
+        return None
+
+    median = median_row["duration_ms"]
+    fast_row = conn.execute("""
+        SELECT COUNT(*) as total, SUM(actual_correct) as correct_count
+        FROM exercise_timing
+        WHERE user_token = ? AND duration_ms < ?
+    """, (user_token, median)).fetchone()
+    conn.close()
+
+    total = fast_row["total"] or 0
+    correct = fast_row["correct_count"] or 0
+    return round(correct / total * 100, 1) if total > 0 else None
+
+
+def get_confidence_calibration(user_token):
+    """How well predicted_correct matches actual_correct."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT predicted_correct, actual_correct, COUNT(*) as count
+        FROM exercise_timing
+        WHERE user_token = ? AND predicted_correct IS NOT NULL
+        GROUP BY predicted_correct, actual_correct
+    """, (user_token,)).fetchall()
+    conn.close()
+
+    if not rows:
+        return None
+
+    total = sum(r["count"] for r in rows)
+    overconf = sum(r["count"] for r in rows
+                   if r["predicted_correct"] == 1 and r["actual_correct"] == 0)
+    underconf = sum(r["count"] for r in rows
+                    if r["predicted_correct"] == 0 and r["actual_correct"] == 1)
+
+    return {
+        "overconfidence_pct": round(overconf / total * 100, 1) if total > 0 else 0,
+        "underconfidence_pct": round(underconf / total * 100, 1) if total > 0 else 0,
+        "calibration_score": round((1 - (overconf + underconf) / total) * 100, 1) if total > 0 else 0
+    }
+
+
+def get_scaffold_dependence(user_token):
+    """Gap between chip-mode and typed-mode accuracy."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT COALESCE(t.input_mode, 'chip') as mode,
+               COUNT(*) as total,
+               SUM(a.correct) as correct_count
+        FROM attempts a
+        LEFT JOIN exercise_timing t ON a.id = t.attempt_id
+        WHERE a.user_token = ?
+        GROUP BY mode
+    """, (user_token,)).fetchall()
+    conn.close()
+
+    by_mode = {}
+    for r in rows:
+        mode = r["mode"] or "chip"
+        by_mode[mode] = round((r["correct_count"] or 0) / r["total"] * 100, 1) if r["total"] > 0 else 0
+
+    gap = abs(by_mode.get("chip", 0) - by_mode.get("typed", 0))
+    return {"by_mode": by_mode, "gap": round(gap, 1)}
+
+
+def get_recent_error_categories(user_token, limit=10):
+    """Get the most recent error categories for adaptive selection."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT DISTINCT error_category FROM error_log
+        WHERE user_token = ?
+        ORDER BY logged_at DESC
+        LIMIT ?
+    """, (user_token, limit)).fetchall()
+    conn.close()
+    return [r["error_category"] for r in rows]
+
+
+def get_all_transfer_progress(user_token):
+    """Get transfer progress for all rules for a user."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM transfer_progress WHERE user_token = ?",
+        (user_token,)
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]

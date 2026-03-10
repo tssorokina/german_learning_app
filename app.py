@@ -32,7 +32,14 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       get_recent_attempts, get_accuracy_over_time, get_user_summary,
                       store_daily_message, get_daily_message, mark_daily_sent,
                       save_word, get_saved_words, delete_saved_word,
-                      update_grammar_rule, get_module_stats)
+                      update_grammar_rule, get_module_stats,
+                      get_active_micro_session, create_micro_session,
+                      advance_micro_session, abandon_micro_session,
+                      record_exercise_timing, update_transfer_progress,
+                      promote_transfer_stage, update_confusion_set_state,
+                      get_delayed_retention, get_transfer_scores,
+                      get_fluency_score, get_confidence_calibration,
+                      get_scaffold_dependence, get_all_transfer_progress)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
                        count_by_difficulty, load_generated_verb_sentences)
@@ -40,6 +47,10 @@ from error_analyzer import (analyze_errors, analyze_gap_fill_errors,
                             analyze_quick_select_errors, get_error_explanation,
                             get_all_categories, ERROR_CATEGORIES)
 from exercise_types import GRAMMAR_MODULES, EXERCISE_TYPES
+from exercise_selector import select_exercise
+from micro_curricula import get_curriculum_for_error, get_current_step, MICRO_CURRICULA
+from transfer_chain import check_promotion, get_far_transfer_prompt
+from confusion_sets import get_confusion_sets_for_errors
 from grammar_exercises import (get_exercises_by_module, get_exercise_by_id,
                                count_by_module_and_level, ALL_GRAMMAR_EXERCISES,
                                load_generated_exercises)
@@ -198,28 +209,47 @@ def grammar_exercise(module_key):
         abort(404)
 
     level = request.args.get("level", type=int)
-    exercises = get_exercises_by_module(module_key, level=level)
+    skip_micro = request.args.get("skip_micro", type=int, default=0)
 
-    if not exercises:
+    # Use adaptive exercise selector
+    result = select_exercise(token, module_key, level, skip_micro=bool(skip_micro))
+
+    if not result:
         return render_template("no_exercises.html")
 
-    # Pick a random exercise
-    ex = random.choice(exercises)
+    ex = result["exercise"]
+    context = result["context"]
+
+    # Handle micro-curriculum study steps (minimal_pair, matrix_display, far_transfer)
+    if ex.get("type") == "micro_step":
+        curriculum_name = context.get("curriculum_name", "")
+        return render_template("micro_step.html",
+                               step=json.dumps(ex["step_data"]),
+                               context=json.dumps({
+                                   "session_id": context.get("session_id"),
+                                   "module_key": module_key
+                               }),
+                               curriculum_name=curriculum_name,
+                               current_step=context.get("step", 0),
+                               total_steps=context.get("total_steps", 1),
+                               module_name=module_info["name"],
+                               module_key=module_key)
+
     exercise_type = ex["type"]
 
     # Route to the correct template based on exercise type
     if exercise_type == "gap_fill":
-        return _serve_gap_fill(ex, module_key, module_info)
+        return _serve_gap_fill(ex, module_key, module_info, context)
     elif exercise_type == "transformation":
-        return _serve_transformation(ex, module_key, module_info)
+        return _serve_transformation(ex, module_key, module_info, context)
     elif exercise_type == "quick_select":
-        return _serve_quick_select(ex, module_key, module_info)
+        return _serve_quick_select(ex, module_key, module_info, context)
     else:
         # reconstruction — use existing engine via prepare_exercise
-        return _serve_reconstruction(ex, module_key, module_info, token)
+        return _serve_reconstruction(ex, module_key, module_info, token, context)
 
 
-def _serve_gap_fill(ex, module_key, module_info):
+def _serve_gap_fill(ex, module_key, module_info, context=None):
     """Serve a gap-fill exercise."""
     safe_data = {
         "exercise_id": ex["id"],
@@ -238,12 +268,13 @@ def _serve_gap_fill(ex, module_key, module_info):
     }
     return render_template("gap_fill.html",
                            exercise=json.dumps(safe_data),
+                           exercise_context=context,
                            module_name=module_info["name"],
                            module_key=module_key,
                            difficulty_label=_diff_label(ex["level"]))
 
 
-def _serve_transformation(ex, module_key, module_info):
+def _serve_transformation(ex, module_key, module_info, context=None):
     """Serve a transformation exercise."""
     words = list(ex["data"]["target_words"])
     random.shuffle(words)
@@ -261,12 +292,13 @@ def _serve_transformation(ex, module_key, module_info):
     }
     return render_template("transformation.html",
                            exercise=json.dumps(safe_data),
+                           exercise_context=context,
                            module_name=module_info["name"],
                            module_key=module_key,
                            difficulty_label=_diff_label(ex["level"]))
 
 
-def _serve_quick_select(ex, module_key, module_info):
+def _serve_quick_select(ex, module_key, module_info, context=None):
     """Serve a quick-select exercise."""
     safe_data = {
         "exercise_id": ex["id"],
@@ -283,12 +315,13 @@ def _serve_quick_select(ex, module_key, module_info):
     }
     return render_template("quick_select.html",
                            exercise=json.dumps(safe_data),
+                           exercise_context=context,
                            module_name=module_info["name"],
                            module_key=module_key,
                            difficulty_label=_diff_label(ex["level"]))
 
 
-def _serve_reconstruction(ex, module_key, module_info, token):
+def _serve_reconstruction(ex, module_key, module_info, token, context=None):
     """Serve a reconstruction exercise for grammar modules."""
     # These exercises have a 'data' dict with text, verbs, clause_type
     # We need to prepare them like the existing sentence bank
@@ -320,10 +353,91 @@ def _serve_reconstruction(ex, module_key, module_info, token):
 
     return render_template("exercise.html",
                            exercise=json.dumps(safe_exercise),
+                           exercise_context=context,
                            retry_id=None,
                            difficulty_label=_diff_label(ex["level"]),
                            module_name=module_info["name"],
                            module_key=module_key)
+
+
+# ─── MICRO-CURRICULUM & ADAPTIVE ENDPOINTS ───────────────────────────
+
+@app.route("/api/micro_step_complete", methods=["POST"])
+def api_micro_step_complete():
+    """Advance a micro-curriculum session to the next step."""
+    token = get_user_token()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "no data"}), 400
+
+    session_id = data.get("session_id")
+    if not session_id:
+        return jsonify({"error": "no session_id"}), 400
+
+    status = advance_micro_session(session_id)
+    return jsonify({"status": status or "error"})
+
+
+@app.route("/api/micro_session_skip", methods=["POST"])
+def api_micro_session_skip():
+    """Abandon the active micro-curriculum session."""
+    token = get_user_token()
+    session = get_active_micro_session(token)
+    if session:
+        abandon_micro_session(session["id"])
+    return jsonify({"status": "skipped"})
+
+
+def _handle_post_check(token, exercise_id, errors, all_correct, data, module, topic):
+    """Common post-check logic: timing, micro-curriculum trigger, transfer tracking."""
+    # Record exercise timing
+    duration_ms = data.get("duration_ms")
+    predicted_correct = data.get("predicted_correct")
+    if duration_ms is not None:
+        record_exercise_timing(
+            token, None, exercise_id, duration_ms,
+            input_mode=data.get("input_mode", "chip"),
+            predicted_correct=predicted_correct,
+            actual_correct=1 if all_correct else 0
+        )
+
+    # Trigger micro-curriculum for errors if none is active
+    if errors and not get_active_micro_session(token):
+        primary_error = errors[0]["category"] if isinstance(errors[0], dict) else errors[0]
+        curriculum = get_curriculum_for_error(primary_error)
+        if curriculum:
+            error_id = None
+            create_micro_session(
+                token, primary_error, error_id, exercise_id,
+                primary_error, len(curriculum["steps"])
+            )
+
+    # Advance micro-curriculum if we're in a drill step
+    session = get_active_micro_session(token)
+    if session and all_correct:
+        step = get_current_step(session)
+        if step and step["type"] in ("controlled_drill", "discrimination", "transfer"):
+            advance_micro_session(session["id"])
+
+    # Update transfer progress
+    if topic:
+        transfer_stage = data.get("transfer_stage", "controlled")
+        update_transfer_progress(token, module, topic, transfer_stage, all_correct)
+
+        # Check for promotion
+        from database import get_transfer_progress as get_tp
+        progress = get_tp(token, topic)
+        if progress:
+            new_stage = check_promotion(progress)
+            if new_stage:
+                promote_transfer_stage(token, topic, new_stage)
+
+    # Update confusion set state if applicable
+    if errors:
+        error_cats = [e["category"] if isinstance(e, dict) else e for e in errors]
+        relevant_sets = get_confusion_sets_for_errors(error_cats)
+        for set_key in relevant_sets:
+            update_confusion_set_state(token, set_key, all_correct)
 
 
 # ─── GRAMMAR API ENDPOINTS ────────────────────────────────────────────
@@ -362,6 +476,10 @@ def api_check_gap_fill():
             error_id = log_error(token, exercise_id, err["category"], err["detail"])
             schedule_retry(token, exercise_id, error_id, days_delay=2)
             explanations.append(get_error_explanation(err))
+
+    # Adaptive: timing, micro-curriculum, transfer, confusion sets
+    _handle_post_check(token, exercise_id, errors, all_correct, data,
+                       ex["module"], ex["topic"])
 
     return jsonify({
         "correct": all_correct,
@@ -420,10 +538,17 @@ def api_check_transformation():
     # Update grammar rule tracking
     update_grammar_rule(token, ex["module"], ex["topic"], all_correct)
 
+    errors_for_adaptive = []
     if not all_correct:
-        error_id = log_error(token, exercise_id, "wrong_" + ex["module"] + "_form",
+        error_cat = "wrong_" + ex["module"] + "_form"
+        error_id = log_error(token, exercise_id, error_cat,
                             f"Expected: {correct_order}")
         schedule_retry(token, exercise_id, error_id, days_delay=2)
+        errors_for_adaptive = [{"category": error_cat}]
+
+    # Adaptive: timing, micro-curriculum, transfer, confusion sets
+    _handle_post_check(token, exercise_id, errors_for_adaptive, all_correct, data,
+                       ex["module"], ex["topic"])
 
     return jsonify({
         "correct": all_correct,
@@ -467,6 +592,10 @@ def api_check_quick_select():
             error_id = log_error(token, exercise_id, err["category"], err["detail"])
             schedule_retry(token, exercise_id, error_id, days_delay=2)
             explanations.append(get_error_explanation(err))
+
+    # Adaptive: timing, micro-curriculum, transfer, confusion sets
+    _handle_post_check(token, exercise_id, errors, all_correct, data,
+                       ex["module"], ex["topic"])
 
     # Build full sentence with correct answers filled in
     full_sentence = ex["data"]["sentence"]
@@ -523,12 +652,26 @@ def dashboard():
                 r["full_text"] = r.get("template_id", "?")
                 r["clause_structure"] = ""
 
+    # Enhanced learning quality metrics
+    retention = get_delayed_retention(token)
+    transfer_scores = get_transfer_scores(token)
+    fluency = get_fluency_score(token)
+    calibration = get_confidence_calibration(token)
+    scaffold = get_scaffold_dependence(token)
+    transfer_progress = get_all_transfer_progress(token)
+
     return render_template("dashboard.html",
                            error_stats=error_stats,
                            recent=recent,
                            accuracy=json.dumps(accuracy),
                            summary=summary,
-                           saved_words=saved_words)
+                           saved_words=saved_words,
+                           retention=retention,
+                           transfer_scores=transfer_scores,
+                           fluency=fluency,
+                           calibration=calibration,
+                           scaffold=scaffold,
+                           transfer_progress=transfer_progress)
 
 
 @app.route('/admin/download-db')
@@ -674,6 +817,14 @@ def api_check_answer():
             error_id = log_error(token, template_id, err["category"], err["detail"])
             schedule_retry(token, template_id, error_id, days_delay=2)
             explanations.append(get_error_explanation(err))
+
+    # Adaptive: timing, micro-curriculum, transfer, confusion sets
+    topic = None
+    if module != "verb_position":
+        grammar_ex_for_topic = get_exercise_by_id(template_id)
+        if grammar_ex_for_topic:
+            topic = grammar_ex_for_topic.get("topic")
+    _handle_post_check(token, template_id, errors, all_correct, data, module, topic)
 
     # Build response with grammar_rule for consistency with other exercise types
     response = {

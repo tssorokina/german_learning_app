@@ -3,6 +3,25 @@
 
 {% block content %}
 <div class="exercise-container">
+    {% if exercise_context and exercise_context.source == 'micro_curriculum' %}
+    <div class="context-banner micro-curriculum-banner">
+        <span class="context-label">{{ exercise_context.curriculum_name }} &mdash; Step {{ exercise_context.step + 1 }}/{{ exercise_context.total_steps }}</span>
+        <a href="/grammar/{{ module_key }}?skip_micro=1" class="context-skip">Skip</a>
+    </div>
+    {% elif exercise_context and exercise_context.source == 'confusion_set' %}
+    <div class="context-banner confusion-banner">
+        <span class="context-label">Contrast: {{ exercise_context.side_label }}</span>
+    </div>
+    {% elif exercise_context and exercise_context.source == 'sm2_review' %}
+    <div class="context-banner review-banner">
+        <span class="context-label">Spaced Review</span>
+    </div>
+    {% elif exercise_context and exercise_context.source == 'transfer_chain' %}
+    <div class="context-banner transfer-banner">
+        <span class="context-label">{{ exercise_context.stage|capitalize }} Transfer</span>
+    </div>
+    {% endif %}
+
     <div class="exercise-header">
         <span class="difficulty-badge">{{ difficulty_label }}</span>
         <span id="clause-type" class="clause-badge"></span>

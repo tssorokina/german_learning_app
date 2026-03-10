@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}{{ curriculum_name }} — Grammar Torture Chamber{% endblock %}
+
+{% block content %}
+<div class="exercise-container">
+    <div class="exercise-header">
+        <span class="difficulty-badge micro-badge">Micro-Curriculum</span>
+        <span class="clause-badge">{{ module_name }}</span>
+    </div>
+
+    <div class="micro-progress">
+        <span class="micro-progress-label">{{ curriculum_name }}</span>
+        <div class="micro-progress-bar">
+            <div class="micro-progress-fill" style="width: {{ ((current_step + 1) / total_steps * 100)|int }}%"></div>
+        </div>
+        <span class="micro-progress-text">Step {{ current_step + 1 }} of {{ total_steps }}</span>
+    </div>
+
+    <div id="step-content" class="micro-step-content"></div>
+
+    <div class="action-bar">
+        <button id="btn-continue" class="btn btn-primary">Continue</button>
+        <a href="/grammar/{{ module_key }}?skip_micro=1" class="btn btn-secondary btn-sm">Skip Remediation</a>
+    </div>
+</div>
+
+<script>
+    const STEP_DATA = {{ step|safe }};
+    const CONTEXT = {{ context|safe }};
+
+    function renderStep() {
+        const container = document.getElementById('step-content');
+        const step = STEP_DATA;
+
+        if (step.type === 'minimal_pair') {
+            renderMinimalPairs(container, step);
+        } else if (step.type === 'matrix_display') {
+            renderMatrix(container, step);
+        } else if (step.type === 'far_transfer') {
+            renderFarTransfer(container, step);
+        }
+    }
+
+    function renderMinimalPairs(container, step) {
+        let html = '<div class="micro-instruction">' + escapeHtml(step.instruction) + '</div>';
+        html += '<div class="minimal-pairs">';
+
+        step.pairs.forEach(function(pair, i) {
+            html += '<div class="minimal-pair-card">';
+
+            if (pair.correct && pair.incorrect) {
+                html += '<div class="pair-row pair-correct">';
+                html += '<span class="pair-icon">&#x2705;</span>';
+                html += '<span class="pair-text">' + escapeHtml(pair.correct) + '</span>';
+                html += '</div>';
+                html += '<div class="pair-row pair-incorrect">';
+                html += '<span class="pair-icon">&#x274c;</span>';
+                html += '<span class="pair-text">' + escapeHtml(pair.incorrect) + '</span>';
+                html += '</div>';
+            } else if (pair.example) {
+                html += '<div class="pair-row">';
+                html += '<span class="pair-connector">' + escapeHtml(pair.connector) + '</span>';
+                html += '<span class="pair-text">' + escapeHtml(pair.example) + '</span>';
+                if (pair.shows_inversion) {
+                    html += '<span class="pair-tag tag-inversion">Inversion</span>';
+                } else {
+                    html += '<span class="pair-tag tag-no-inversion">Keine Inversion</span>';
+                }
+                html += '</div>';
+            }
+
+            if (pair.rule) {
+                html += '<div class="pair-rule">' + escapeHtml(pair.rule) + '</div>';
+            }
+            html += '</div>';
+        });
+
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    function renderMatrix(container, step) {
+        let html = '<div class="micro-instruction">' + escapeHtml(step.instruction) + '</div>';
+        const matrix = step.matrix;
+
+        if (matrix.title) {
+            html += '<h3 class="matrix-title">' + escapeHtml(matrix.title) + '</h3>';
+        }
+
+        html += '<div class="matrix-wrapper"><table class="grammar-matrix">';
+        html += '<thead><tr>';
+        matrix.headers.forEach(function(h) {
+            html += '<th>' + escapeHtml(h) + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+
+        matrix.rows.forEach(function(row) {
+            html += '<tr>';
+            row.forEach(function(cell, i) {
+                if (i === 0) {
+                    html += '<th>' + escapeHtml(cell) + '</th>';
+                } else {
+                    html += '<td>' + escapeHtml(cell) + '</td>';
+                }
+            });
+            html += '</tr>';
+        });
+
+        html += '</tbody></table></div>';
+        container.innerHTML = html;
+    }
+
+    function renderFarTransfer(container, step) {
+        let html = '<div class="micro-instruction">' + escapeHtml(step.instruction) + '</div>';
+        html += '<div class="far-transfer-prompt">';
+        html += '<p class="prompt-text">' + escapeHtml(step.prompt) + '</p>';
+        html += '<p class="prompt-hint">This is a free-writing exercise. Write your answer on paper or in a note app, then click Continue.</p>';
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    document.getElementById('btn-continue').addEventListener('click', function() {
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Loading...';
+
+        fetch('/api/micro_step_complete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                session_id: CONTEXT.session_id
+            })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.status === 'completed') {
+                window.location.href = '/grammar/' + CONTEXT.module_key;
+            } else {
+                window.location.href = '/grammar/' + CONTEXT.module_key;
+            }
+        })
+        .catch(function() {
+            btn.disabled = false;
+            btn.textContent = 'Continue';
+        });
+    });
+
+    renderStep();
+</script>
+{% endblock %}

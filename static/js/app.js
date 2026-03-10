@@ -26,6 +26,7 @@
     let selectedChip = null;
     let longPressTimer = null;
     const LONG_PRESS_DURATION = 500; // ms
+    const exerciseStartTime = Date.now();
 
     // ─── INIT ────────────────────────────────────────────
     function init() {
@@ -372,7 +373,8 @@
                     template_id: exercise.template_id,
                     positions: positions,
                     retry_id: retryId,
-                    module: exercise.module || "verb_position"
+                    module: exercise.module || "verb_position",
+                    duration_ms: Date.now() - exerciseStartTime
                 })
             });
 

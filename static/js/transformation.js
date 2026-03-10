@@ -17,6 +17,7 @@
     let slotElements = [];
     let chipElements = [];
     let dragState = null;
+    const exerciseStartTime = Date.now();
 
     function init() {
         // Show source sentence
@@ -197,7 +198,8 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     exercise_id: exercise.exercise_id,
-                    positions: positions
+                    positions: positions,
+                    duration_ms: Date.now() - exerciseStartTime
                 })
             });
 

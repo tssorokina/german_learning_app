@@ -14,6 +14,7 @@
 
     // State: selected answer for each gap
     let gapSelections = {};
+    const exerciseStartTime = Date.now();
 
     function init() {
         if (exercise.grammar_tip) {
@@ -109,7 +110,8 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     exercise_id: exercise.exercise_id,
-                    answers: gapSelections
+                    answers: gapSelections,
+                    duration_ms: Date.now() - exerciseStartTime
                 })
             });
 
