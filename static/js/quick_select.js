@@ -11,13 +11,21 @@
     const btnReset = document.getElementById("btn-reset");
     const resultArea = document.getElementById("result-area");
     const grammarHint = document.getElementById("grammar-hint");
+    const grammarHintWrapper = document.getElementById("grammar-hint-wrapper");
+    const grammarHintToggle = document.getElementById("grammar-hint-toggle");
 
     let gapSelections = {};
     const exerciseStartTime = Date.now();
 
     function init() {
         if (exercise.grammar_tip) {
+            grammarHintWrapper.style.display = "";
             grammarHint.textContent = exercise.grammar_tip;
+            grammarHintToggle.addEventListener("click", function () {
+                const isHidden = grammarHint.style.display === "none";
+                grammarHint.style.display = isHidden ? "" : "none";
+                grammarHintToggle.textContent = isHidden ? "Hide Tip" : "Show Tip";
+            });
         }
         renderSentence();
         btnCheck.addEventListener("click", checkAnswer);

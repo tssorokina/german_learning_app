@@ -22,6 +22,8 @@ services:
         generateValue: true
       - key: API_TOKEN
         generateValue: true
+      - key: OPENAI_API_KEY  # or OPENAI_API_KEY
+        sync: false 
       - key: BASE_URL
         value: https://verb-end-torture-chamber.onrender.com
       - key: DB_PATH

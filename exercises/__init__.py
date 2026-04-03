@@ -23,9 +23,29 @@ from exercises.relativ import RELATIV_BANK
 from exercises.praepositionen import PRAEPOSITIONEN_BANK
 from exercises.nominalisierung import NOMINALISIERUNG_BANK
 
-# Grammar module banks (everything except verb_position which is handled
-# separately via sentences.py)
+# Convert verb_position exercises from legacy format to unified format
+# so they work with the grammar module route (/grammar/verb_position)
+_VERB_POSITION_UNIFIED = [
+    {
+        "id": ex["id"],
+        "module": "verb_position",
+        "type": "reconstruction",
+        "level": ex["difficulty"],
+        "topic": ex["clause_type"],
+        "data": {
+            "text": ex["text"],
+            "verbs": ex["verbs"],
+            "clause_type": ex["clause_type"],
+        },
+        "grammar_rule": ex["explanation"],
+        "grammar_tip": "",
+    }
+    for ex in VERB_POSITION_BANK
+]
+
+# Grammar module banks — all modules including verb_position
 GRAMMAR_EXERCISE_BANKS = {
+    "verb_position": _VERB_POSITION_UNIFIED,
     "adjektive": ADJEKTIVE_BANK,
     "konnektoren": KONNEKTOREN_BANK,
     "passiv": PASSIV_BANK,

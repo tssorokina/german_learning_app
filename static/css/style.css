@@ -194,6 +194,9 @@ body {
 .btn-danger { background: rgba(248, 113, 113, 0.15); color: var(--error); border: 1px solid rgba(248, 113, 113, 0.3); }
 .btn-lg { padding: 16px 32px; font-size: 1.05rem; }
 .btn-sm { padding: 8px 14px; font-size: 0.8rem; }
+.btn-hint { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); font-size: 0.85rem; padding: 6px 16px; }
+.btn-hint:hover { color: var(--text); border-color: var(--accent); }
+.grammar-hint-wrapper { margin-top: 8px; }
 
 /* ─── EXERCISE PAGE ───────────────────────────── */
 .exercise-container { padding-top: 8px; }
