@@ -28,6 +28,13 @@
                 grammarHintToggle.textContent = isHidden ? "Hide Tip" : "Show Tip";
             });
         }
+
+        // Show English translation if available
+        var translationEl = document.getElementById("english-translation");
+        if (exercise.english && translationEl) {
+            translationEl.textContent = exercise.english;
+        }
+
         renderSentence();
         btnCheck.addEventListener("click", checkAnswer);
         btnReset.addEventListener("click", resetExercise);

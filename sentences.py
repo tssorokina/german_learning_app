@@ -118,6 +118,7 @@ def prepare_exercise(template):
         "clause_type": template["clause_type"],
         "difficulty": template["difficulty"],
         "explanation": template["explanation"],
+        "english": template.get("english", ""),
         # Keep legacy fields for error analyzer
         "slots": verb_slots,
         "verbs": verbs,

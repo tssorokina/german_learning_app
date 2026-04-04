@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from flask import (Flask, render_template, request, jsonify, session,
-                   redirect, url_for, abort)
+                   redirect, url_for, abort, flash)
 
 from database import (init_db, get_or_create_user, get_retry_template,
                       mark_sentence_shown, record_attempt,
@@ -39,7 +39,9 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       promote_transfer_stage, update_confusion_set_state,
                       get_delayed_retention, get_transfer_scores,
                       get_fluency_score, get_confidence_calibration,
-                      get_scaffold_dependence, get_all_transfer_progress)
+                      get_scaffold_dependence, get_all_transfer_progress,
+                      register_user, authenticate_user, get_user_by_token,
+                      merge_anonymous_into_user)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
                        count_by_difficulty, load_generated_verb_sentences)
@@ -82,12 +84,27 @@ _init_exercises()
 
 
 def get_user_token():
-    """Get or create a persistent user token in the session."""
+    """Get or create a persistent user token in the session.
+
+    If a user is logged in, their registered token is used.
+    Otherwise, an anonymous session token is created.
+    """
     if "user_token" not in session:
         session["user_token"] = secrets.token_hex(8)
         session.permanent = True
     get_or_create_user(session["user_token"])
     return session["user_token"]
+
+
+def get_current_user():
+    """Return the current user dict if logged in, else None."""
+    token = session.get("user_token")
+    if not token:
+        return None
+    user = get_user_by_token(token)
+    if user and user.get("email"):
+        return user
+    return None
 
 
 def require_api_token(f):
@@ -106,6 +123,89 @@ def require_api_token(f):
 @app.before_request
 def ensure_db():
     init_db()
+
+
+@app.context_processor
+def inject_user():
+    """Make current_user available in all templates."""
+    return {"current_user": get_current_user()}
+
+
+# ─── AUTHENTICATION ROUTES ─────────────────────────────────────────────
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if get_current_user():
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        password2 = request.form.get("password2", "")
+        display_name = request.form.get("display_name", "").strip()
+
+        if not email or not password:
+            flash("Email and password are required.", "error")
+            return render_template("register.html")
+        if password != password2:
+            flash("Passwords do not match.", "error")
+            return render_template("register.html")
+        if len(password) < 6:
+            flash("Password must be at least 6 characters.", "error")
+            return render_template("register.html")
+
+        # Remember the anonymous token so we can merge progress
+        anon_token = session.get("user_token")
+
+        user, error = register_user(email, password, display_name or None)
+        if error:
+            flash(error, "error")
+            return render_template("register.html")
+
+        # Merge any anonymous learning progress into the new account
+        if anon_token and anon_token != user["token"]:
+            merge_anonymous_into_user(anon_token, user["token"])
+
+        session["user_token"] = user["token"]
+        session.permanent = True
+        flash("Account created! Your learning progress is now saved.", "success")
+        return redirect(url_for("index"))
+
+    return render_template("register.html")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if get_current_user():
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        user = authenticate_user(email, password)
+        if not user:
+            flash("Invalid email or password.", "error")
+            return render_template("login.html")
+
+        # Merge any anonymous progress accumulated before login
+        anon_token = session.get("user_token")
+        if anon_token and anon_token != user["token"]:
+            merge_anonymous_into_user(anon_token, user["token"])
+
+        session["user_token"] = user["token"]
+        session.permanent = True
+        flash("Welcome back!", "success")
+        return redirect(url_for("index"))
+
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    flash("You have been logged out.", "success")
+    return redirect(url_for("index"))
 
 
 # ─── WEB ROUTES ────────────────────────────────────────────────────────
@@ -167,6 +267,7 @@ def exercise_page():
         "shuffled_words": exercise["shuffled_words"],
         "clause_type": exercise["clause_type"],
         "difficulty": exercise["difficulty"],
+        "english": exercise.get("english", ""),
     }
 
     return render_template("exercise.html",
@@ -264,7 +365,8 @@ def _serve_gap_fill(ex, module_key, module_info, context=None):
             "options": g["options"],
             "indicative_hint": g.get("indicative_hint", "")
         } for g in ex["data"]["gaps"]],
-        "grammar_tip": ex.get("grammar_tip", "")
+        "grammar_tip": ex.get("grammar_tip", ""),
+        "english": ex["data"].get("english", ""),
     }
     return render_template("gap_fill.html",
                            exercise=json.dumps(safe_data),
@@ -328,6 +430,7 @@ def _serve_reconstruction(ex, module_key, module_info, token, context=None):
     template = {
         "id": ex["id"],
         "text": ex["data"]["text"],
+        "english": ex["data"].get("english", ""),
         "verbs": ex["data"]["verbs"],
         "clause_type": ex["data"]["clause_type"],
         "difficulty": ex["level"],
@@ -346,6 +449,7 @@ def _serve_reconstruction(ex, module_key, module_info, token, context=None):
         "clause_type": exercise["clause_type"],
         "difficulty": exercise["difficulty"],
         "module": module_key,
+        "english": exercise.get("english", ""),
         # Extra info for reconstruction exercises with source sentences
         "sentence_a": ex["data"].get("sentence_a", ""),
         "sentence_b": ex["data"].get("sentence_b", ""),

@@ -31,6 +31,13 @@
     // ─── INIT ────────────────────────────────────────────
     function init() {
         clauseType.textContent = exercise.clause_type.replace(/_/g, " ");
+
+        // Show English translation if available
+        var translationEl = document.getElementById("english-translation");
+        if (exercise.english && translationEl) {
+            translationEl.textContent = exercise.english;
+        }
+
         renderSentence();
         renderWords();
         btnCheck.addEventListener("click", checkAnswer);

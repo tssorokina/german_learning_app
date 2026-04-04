@@ -70,6 +70,97 @@ body {
 }
 .nav-link:hover { color: var(--accent); }
 
+.nav-links { align-items: center; flex-wrap: wrap; }
+
+.nav-user {
+    font-size: 0.8rem;
+    color: var(--accent);
+    font-weight: 500;
+    padding-left: 8px;
+    border-left: 1px solid var(--border);
+}
+.nav-link-auth {
+    color: var(--accent) !important;
+    border: 1px solid var(--accent);
+    padding: 4px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem !important;
+}
+.nav-link-auth:hover { background: var(--accent); color: #fff !important; }
+.nav-link-logout { font-size: 0.8rem !important; }
+
+/* ─── AUTH PAGES ─────────────────────────────────── */
+.auth-container {
+    max-width: 400px;
+    margin: 60px auto 0;
+    padding: 0 16px;
+}
+.auth-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.auth-subtitle {
+    color: var(--text-dim);
+    margin-bottom: 24px;
+    font-size: 0.95rem;
+}
+.auth-form { display: flex; flex-direction: column; gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-dim);
+}
+.form-group input {
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 1rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+.form-group input:focus {
+    border-color: var(--accent);
+}
+.auth-submit {
+    margin-top: 8px;
+    width: 100%;
+}
+.auth-switch {
+    text-align: center;
+    margin-top: 20px;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+.auth-switch a {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+}
+.auth-switch a:hover { text-decoration: underline; }
+
+/* Flash messages */
+.flash-container { margin-top: 12px; }
+.flash-message {
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 16px;
+    font-size: 0.9rem;
+}
+.flash-error {
+    background: rgba(248, 113, 113, 0.15);
+    color: var(--error);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+}
+.flash-success {
+    background: rgba(74, 222, 128, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
 /* ─── CONTAINER ───────────────────────────────── */
 .container {
     max-width: 700px;
@@ -200,6 +291,18 @@ body {
 
 /* ─── EXERCISE PAGE ───────────────────────────── */
 .exercise-container { padding-top: 8px; }
+
+.english-translation {
+    font-size: 1.05rem;
+    font-style: italic;
+    color: var(--muted);
+    padding: 10px 16px;
+    margin-bottom: 8px;
+    border-left: 3px solid var(--accent);
+    background: var(--surface2);
+    border-radius: 0 6px 6px 0;
+}
+.english-translation:empty { display: none; }
 
 .exercise-header {
     display: flex;

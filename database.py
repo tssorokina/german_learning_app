@@ -3,6 +3,7 @@ import sqlite3
 import os
 import json
 from datetime import datetime, date, timedelta
+from werkzeug.security import generate_password_hash, check_password_hash
 
 DB_PATH = os.environ.get("DB_PATH", "german_app.db")
 
@@ -166,6 +167,17 @@ def init_db():
         except Exception:
             conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {defn}")
 
+    # Add email and password_hash columns to users if missing
+    for col, defn in [
+        ("email", "TEXT"),
+        ("password_hash", "TEXT"),
+        ("display_name", "TEXT"),
+    ]:
+        try:
+            conn.execute(f"SELECT {col} FROM users LIMIT 1")
+        except Exception:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col} {defn}")
+
     conn.commit()
     conn.close()
 
@@ -179,6 +191,82 @@ def get_or_create_user(token):
         row = conn.execute("SELECT * FROM users WHERE token = ?", (token,)).fetchone()
     conn.close()
     return dict(row)
+
+
+# ─── AUTHENTICATION ────────────────────────────────────────────────────
+
+def register_user(email, password, display_name=None):
+    """Register a new user with email and password.
+
+    Returns (user_dict, error_string). On success error is None.
+    """
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    if existing:
+        conn.close()
+        return None, "An account with this email already exists."
+
+    import secrets as _secrets
+    token = _secrets.token_hex(8)
+    pw_hash = generate_password_hash(password, method="pbkdf2:sha256")
+    conn.execute(
+        "INSERT INTO users (token, email, password_hash, display_name) VALUES (?, ?, ?, ?)",
+        (token, email, pw_hash, display_name or email.split("@")[0])
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM users WHERE token = ?", (token,)).fetchone()
+    conn.close()
+    return dict(row), None
+
+
+def authenticate_user(email, password):
+    """Check email/password credentials.
+
+    Returns user dict on success, None on failure.
+    """
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    user = dict(row)
+    if not user.get("password_hash"):
+        return None
+    if check_password_hash(user["password_hash"], password):
+        return user
+    return None
+
+
+def get_user_by_token(token):
+    """Retrieve a user record by token."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE token = ?", (token,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def merge_anonymous_into_user(anon_token, user_token):
+    """Migrate all learning data from an anonymous session into a registered user.
+
+    This transfers attempts, shown_sentences, error_log, retry_queue,
+    saved_words, grammar_rules, micro_curriculum_sessions,
+    transfer_progress, exercise_timing, and confusion_set_state.
+    """
+    conn = get_db()
+    tables_with_user_token = [
+        "attempts", "shown_sentences", "error_log", "retry_queue",
+        "saved_words", "grammar_rules", "micro_curriculum_sessions",
+        "transfer_progress", "exercise_timing", "confusion_set_state",
+    ]
+    for table in tables_with_user_token:
+        conn.execute(
+            f"UPDATE {table} SET user_token = ? WHERE user_token = ?",
+            (user_token, anon_token)
+        )
+    # Delete the anonymous user record
+    conn.execute("DELETE FROM users WHERE token = ?", (anon_token,))
+    conn.commit()
+    conn.close()
 
 
 def get_shown_template_ids(user_token):

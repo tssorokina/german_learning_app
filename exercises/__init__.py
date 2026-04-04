@@ -34,6 +34,7 @@ _VERB_POSITION_UNIFIED = [
         "topic": ex["clause_type"],
         "data": {
             "text": ex["text"],
+            "english": ex.get("english", ""),
             "verbs": ex["verbs"],
             "clause_type": ex["clause_type"],
         },
@@ -55,8 +56,17 @@ GRAMMAR_EXERCISE_BANKS = {
     "nominalisierung": NOMINALISIERUNG_BANK,
 }
 
-# All banks including verb_position (keyed by module name)
+# All banks in their ORIGINAL format (verb_position stays in legacy format
+# with top-level "text"/"verbs" keys, used by sentences.py / SENTENCE_BANK).
+# Do NOT spread GRAMMAR_EXERCISE_BANKS here — its verb_position entry uses
+# the unified format which would overwrite the legacy one and break prepare_exercise().
 ALL_EXERCISE_BANKS = {
     "verb_position": VERB_POSITION_BANK,
-    **GRAMMAR_EXERCISE_BANKS,
+    "adjektive": ADJEKTIVE_BANK,
+    "konnektoren": KONNEKTOREN_BANK,
+    "passiv": PASSIV_BANK,
+    "konjunktiv": KONJUNKTIV_BANK,
+    "relativ": RELATIV_BANK,
+    "praepositionen": PRAEPOSITIONEN_BANK,
+    "nominalisierung": NOMINALISIERUNG_BANK,
 }
