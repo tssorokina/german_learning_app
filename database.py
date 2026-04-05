@@ -929,3 +929,112 @@ def get_all_transfer_progress(user_token):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_mastered_exercise_ids(user_token, module=None):
+    """Return set of exercise IDs the user answered correctly (never failed).
+
+    An exercise is 'mastered' if the user has attempted it at least once
+    and has NEVER answered it incorrectly.
+    """
+    conn = get_db()
+    query = """
+        SELECT template_id
+        FROM attempts
+        WHERE user_token = ?
+    """
+    params = [user_token]
+    if module:
+        query += " AND module = ?"
+        params.append(module)
+
+    query += """
+        GROUP BY template_id
+        HAVING MIN(correct) = 1
+    """
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return {r["template_id"] for r in rows}
+
+
+def get_attempted_exercise_ids(user_token, module=None):
+    """Return set of exercise IDs the user has attempted at least once."""
+    conn = get_db()
+    query = "SELECT DISTINCT template_id FROM attempts WHERE user_token = ?"
+    params = [user_token]
+    if module:
+        query += " AND module = ?"
+        params.append(module)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return {r["template_id"] for r in rows}
+
+
+def get_recent_failed_rules(user_token, module=None, limit=5):
+    """Return the grammar rule IDs (topics) from recent incorrect attempts.
+
+    Used to reinforce the same rule with follow-up exercises.
+    """
+    conn = get_db()
+    query = """
+        SELECT DISTINCT a.template_id, e.error_category
+        FROM attempts a
+        LEFT JOIN error_log e ON e.user_token = a.user_token
+            AND e.template_id = a.template_id
+        WHERE a.user_token = ? AND a.correct = 0
+    """
+    params = [user_token]
+    if module:
+        query += " AND a.module = ?"
+        params.append(module)
+    query += " ORDER BY a.attempted_at DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_failed_exercise_topics(user_token, module=None, limit=3):
+    """Return topics from the user's most recent failures for reinforcement.
+
+    Returns a list of topic strings (e.g., 'dass_clause', 'relativpronomen_akk').
+    """
+    conn = get_db()
+    # Get the topics of recently-failed exercises by joining with grammar_rules
+    # or just pull from attempts directly
+    query = """
+        SELECT DISTINCT
+            json_extract(errors_json, '$[0].category') as error_cat,
+            module
+        FROM attempts
+        WHERE user_token = ? AND correct = 0
+    """
+    params = [user_token]
+    if module:
+        query += " AND module = ?"
+        params.append(module)
+    query += " ORDER BY attempted_at DESC LIMIT ?"
+    params.append(limit * 2)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    # Also get topics from the grammar_rules table for recently-tested low-scoring rules
+    conn2 = get_db()
+    query2 = """
+        SELECT rule_id, module FROM grammar_rules
+        WHERE user_token = ? AND times_correct < times_tested
+    """
+    params2 = [user_token]
+    if module:
+        query2 += " AND module = ?"
+        params2.append(module)
+    query2 += " ORDER BY last_tested DESC LIMIT ?"
+    params2.append(limit)
+    rows2 = conn2.execute(query2, params2).fetchall()
+    conn2.close()
+
+    topics = []
+    for r in rows2:
+        if r["rule_id"] not in topics:
+            topics.append(r["rule_id"])
+    return topics[:limit]

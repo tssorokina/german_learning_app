@@ -250,8 +250,8 @@ def exercise_page():
             retry_id = retry.get("retry_id")
 
     if not exercise:
-        # Get list of shown template IDs for this user
-        exercise = get_exercise_by_difficulty(difficulty)
+        # Smart selection: prefer unseen, then failed, then any
+        exercise = get_exercise_by_difficulty(difficulty, user_token=token)
 
     if not exercise:
         return render_template("no_exercises.html")

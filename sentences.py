@@ -140,8 +140,14 @@ def load_generated_verb_sentences(generated):
                     f"(total: {len(SENTENCE_BANK)})")
 
 
-def get_exercise_by_difficulty(difficulty=None, exclude_ids=None):
-    """Get a random exercise, optionally filtered by difficulty."""
+def get_exercise_by_difficulty(difficulty=None, exclude_ids=None, user_token=None):
+    """Get an exercise, optionally filtered by difficulty.
+
+    When user_token is provided, applies smart selection:
+    1. Prefer unseen exercises
+    2. Then previously-failed exercises
+    3. Then any exercise (if all mastered)
+    """
     pool = SENTENCE_BANK
     if difficulty is not None:
         pool = [s for s in pool if s["difficulty"] == difficulty]
@@ -149,6 +155,26 @@ def get_exercise_by_difficulty(difficulty=None, exclude_ids=None):
         pool = [s for s in pool if s["id"] not in exclude_ids]
     if not pool:
         return None
+
+    if user_token:
+        from database import get_mastered_exercise_ids, get_attempted_exercise_ids
+
+        attempted = get_attempted_exercise_ids(user_token, module="verb_position")
+        mastered = get_mastered_exercise_ids(user_token, module="verb_position")
+
+        # Tier 1: Unseen exercises
+        unseen = [s for s in pool if s["id"] not in attempted]
+        if unseen:
+            template = random.choice(unseen)
+            return prepare_exercise(template)
+
+        # Tier 2: Failed (not yet mastered) exercises
+        failed = [s for s in pool if s["id"] not in mastered]
+        if failed:
+            template = random.choice(failed)
+            return prepare_exercise(template)
+
+    # Tier 3 / no user_token: any exercise
     template = random.choice(pool)
     return prepare_exercise(template)
 

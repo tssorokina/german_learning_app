@@ -17,7 +17,9 @@ from confusion_sets import (CONFUSION_SETS, get_confusion_sets_for_errors,
                             get_next_side, get_confusion_set_info)
 from database import (get_active_micro_session, get_grammar_rules_due,
                       get_confusion_set_states, get_recent_error_categories,
-                      get_transfer_progress, get_all_transfer_progress)
+                      get_transfer_progress, get_all_transfer_progress,
+                      get_mastered_exercise_ids, get_attempted_exercise_ids,
+                      get_failed_exercise_topics, schedule_retry)
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +55,17 @@ def select_exercise(user_token, module_key=None, level=None, skip_micro=False):
     if result:
         return result
 
-    # Priority 5: Random fallback
-    exercises = get_exercises_by_module(module_key, level=level) if module_key else []
-    if not exercises:
-        return None
-    return {
-        "exercise": random.choice(exercises),
-        "context": {"source": "random"}
-    }
+    # Priority 5: Reinforcement of recent errors (2-3 exercises on same topic)
+    result = _try_error_reinforcement(user_token, module_key, level)
+    if result:
+        return result
+
+    # Priority 6: Smart fallback — prefer unseen exercises, skip mastered ones
+    result = _try_smart_fallback(user_token, module_key, level)
+    if result:
+        return result
+
+    return None
 
 
 def _try_micro_curriculum(user_token, module_key):
@@ -304,3 +309,86 @@ def _try_sm2_review(user_token, module_key):
         }
 
     return None
+
+
+def _try_error_reinforcement(user_token, module_key, level):
+    """After a mistake, serve 2-3 exercises on the same topic/rule.
+
+    Looks at the user's most recent failures and picks exercises with
+    matching topics so the user practices the same grammar pattern.
+    """
+    if not module_key:
+        return None
+
+    failed_topics = get_failed_exercise_topics(user_token, module=module_key, limit=3)
+    if not failed_topics:
+        return None
+
+    exercises = get_exercises_by_module(module_key, level=level)
+    if not exercises:
+        return None
+
+    mastered = get_mastered_exercise_ids(user_token, module=module_key)
+
+    for topic in failed_topics:
+        # Find exercises with the same topic that are NOT already mastered
+        topic_exercises = [
+            e for e in exercises
+            if e.get("topic") == topic and e["id"] not in mastered
+        ]
+        if topic_exercises:
+            chosen = random.choice(topic_exercises)
+            logger.info(f"Reinforcement: serving {chosen['id']} for failed topic '{topic}'")
+            return {
+                "exercise": chosen,
+                "context": {
+                    "source": "error_reinforcement",
+                    "reinforced_topic": topic
+                }
+            }
+
+    return None
+
+
+def _try_smart_fallback(user_token, module_key, level):
+    """Smart fallback: prefer unseen exercises, skip mastered ones.
+
+    Priority order:
+    1. Exercises the user has never seen
+    2. Exercises the user has seen but failed (and aren't in retry queue)
+    3. All exercises (only if everything else is exhausted)
+    """
+    exercises = get_exercises_by_module(module_key, level=level) if module_key else []
+    if not exercises:
+        return None
+
+    mastered = get_mastered_exercise_ids(user_token, module=module_key)
+    attempted = get_attempted_exercise_ids(user_token, module=module_key)
+
+    # Tier 1: Never-seen exercises
+    unseen = [e for e in exercises if e["id"] not in attempted]
+    if unseen:
+        chosen = random.choice(unseen)
+        logger.info(f"Smart fallback: serving unseen exercise {chosen['id']}")
+        return {
+            "exercise": chosen,
+            "context": {"source": "unseen"}
+        }
+
+    # Tier 2: Previously failed (not yet mastered) exercises
+    failed = [e for e in exercises if e["id"] not in mastered]
+    if failed:
+        chosen = random.choice(failed)
+        logger.info(f"Smart fallback: serving previously-failed exercise {chosen['id']}")
+        return {
+            "exercise": chosen,
+            "context": {"source": "retry_failed"}
+        }
+
+    # Tier 3: All exercises (user has mastered everything — cycle back)
+    chosen = random.choice(exercises)
+    logger.info(f"Smart fallback: all mastered, cycling exercise {chosen['id']}")
+    return {
+        "exercise": chosen,
+        "context": {"source": "random"}
+    }
