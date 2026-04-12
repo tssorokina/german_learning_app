@@ -28,31 +28,108 @@
     const LONG_PRESS_DURATION = 500; // ms
     const exerciseStartTime = Date.now();
 
+    // ─── SCAFFOLD LEVELS ────────────────────────────────
+    // 0 = A2/B1: translation collapsed (tap to reveal), verb slots highlighted
+    // 1 = B1/B2: translation hidden, 1 hint available (reveal next correct word)
+    // 2 = B2/C1: no translation, no hints
+    const scaffoldLevel = exercise.scaffold_level || 0;
+
     // ─── INIT ────────────────────────────────────────────
     function init() {
         clauseType.textContent = exercise.clause_type.replace(/_/g, " ");
 
-        // Show English translation if available
+        // Scaffold Level 0: translation collapsed behind a toggle
+        // Scaffold Level 1: translation hidden entirely (but hint button shown)
+        // Scaffold Level 2: no translation, no hints
         var translationEl = document.getElementById("english-translation");
         if (exercise.english && translationEl) {
-            translationEl.textContent = exercise.english;
+            if (scaffoldLevel === 0) {
+                translationEl.textContent = exercise.english;
+                translationEl.classList.add("scaffold-collapsed");
+                translationEl.title = "Tap to reveal translation";
+                translationEl.addEventListener("click", function () {
+                    translationEl.classList.toggle("scaffold-collapsed");
+                });
+            } else {
+                translationEl.style.display = "none";
+            }
         }
 
         renderSentence();
         renderWords();
+
+        // Scaffold Level 0: highlight verb slots
+        if (scaffoldLevel === 0 && exercise.verb_indices) {
+            exercise.verb_indices.forEach(function (vi) {
+                if (slotElements[vi]) {
+                    slotElements[vi].classList.add("verb-hint-slot");
+                }
+            });
+        }
+
+        // Scaffold Level 0-1: add hint button
+        if (scaffoldLevel <= 1) {
+            _addHintButton();
+        }
+
         btnCheck.addEventListener("click", checkAnswer);
         btnReset.addEventListener("click", resetExercise);
+    }
+
+    let hintsUsed = 0;
+    const maxHints = scaffoldLevel === 0 ? 2 : 1;
+
+    function _addHintButton() {
+        const actionBar = btnCheck.parentElement;
+        const hintBtn = document.createElement("button");
+        hintBtn.className = "btn btn-hint";
+        hintBtn.id = "btn-hint";
+        hintBtn.textContent = "Hint (" + maxHints + " left)";
+        actionBar.appendChild(hintBtn);
+
+        hintBtn.addEventListener("click", function () {
+            if (hintsUsed >= maxHints) return;
+            // Find next empty or wrong slot and reveal correct word
+            const exercise_words = exercise.shuffled_words;
+            for (let i = 0; i < slotElements.length; i++) {
+                const placed = slotElements[i].querySelector(".placed-word");
+                if (!placed.textContent) {
+                    // Find the correct word for this position from the template
+                    // We just flash the slot as a positional hint
+                    slotElements[i].classList.add("flash-wrong");
+                    setTimeout(function () {
+                        slotElements[i].classList.remove("flash-wrong");
+                    }, 1500);
+                    hintsUsed++;
+                    const remaining = maxHints - hintsUsed;
+                    hintBtn.textContent = remaining > 0
+                        ? "Hint (" + remaining + " left)"
+                        : "No hints left";
+                    if (remaining <= 0) hintBtn.disabled = true;
+                    break;
+                }
+            }
+        });
     }
 
     function renderSentence() {
         sentenceArea.innerHTML = "";
         slotElements = [];
         const numSlots = exercise.num_slots;
+        const prefixes = exercise.slot_prefixes || [];
         const suffixes = exercise.slot_suffixes;
 
         for (let i = 0; i < numSlots; i++) {
             const wrapper = document.createElement("span");
             wrapper.className = "slot-wrapper";
+
+            // Leading punctuation (quotes, brackets) BEFORE the slot
+            if (prefixes[i]) {
+                const pre = document.createElement("span");
+                pre.className = "slot-punct slot-prefix";
+                pre.textContent = prefixes[i];
+                wrapper.appendChild(pre);
+            }
 
             const el = document.createElement("span");
             el.className = "slot";
@@ -61,7 +138,7 @@
             slotElements.push(el);
             wrapper.appendChild(el);
 
-            // Punctuation OUTSIDE the slot
+            // Trailing punctuation AFTER the slot
             if (suffixes[i]) {
                 const punct = document.createElement("span");
                 punct.className = "slot-punct";
@@ -227,6 +304,7 @@
     function placeWord(chip, slotEl) {
         const placed = slotEl.querySelector(".placed-word");
         placed.textContent = chip.dataset.word;
+        slotEl.dataset.chipId = chip.dataset.chipIndex;
         slotEl.classList.add("filled");
         chip.classList.add("placed");
         updateCheckButton();
@@ -235,12 +313,16 @@
     function returnToTray(word, slotEl) {
         const placed = slotEl.querySelector(".placed-word");
         placed.textContent = "";
+        const chipId = slotEl.dataset.chipId;
+        delete slotEl.dataset.chipId;
         slotEl.classList.remove("filled");
-        // Find the first chip with this word that is placed and un-place it
-        for (const c of chipElements) {
-            if (c.dataset.word === word && c.classList.contains("placed")) {
-                c.classList.remove("placed");
-                break;
+        // Use chip ID for exact match (handles duplicate words correctly)
+        if (chipId != null) {
+            for (const c of chipElements) {
+                if (c.dataset.chipIndex === chipId) {
+                    c.classList.remove("placed");
+                    break;
+                }
             }
         }
         updateCheckButton();
@@ -455,6 +537,22 @@
                 `;
                 errorDetails.appendChild(card);
             });
+        }
+
+        // Word-level feedback when no verb errors explain the mistake
+        if (data.word_feedback && !data.correct) {
+            const wf = data.word_feedback;
+            const card = document.createElement("div");
+            card.className = "error-detail-card word-feedback-card";
+            card.innerHTML = `<div class="error-cat">${wf.hint}</div>`;
+            errorDetails.appendChild(card);
+
+            // Auto-scroll to first wrong slot and flash it
+            if (wf.first_wrong_index != null && slotElements[wf.first_wrong_index]) {
+                const wrongSlot = slotElements[wf.first_wrong_index];
+                wrongSlot.classList.add("flash-wrong");
+                wrongSlot.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
         }
 
         resultArea.scrollIntoView({ behavior: "smooth", block: "start" });

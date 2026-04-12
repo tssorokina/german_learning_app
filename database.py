@@ -147,6 +147,12 @@ def init_db():
             UNIQUE(user_token, confusion_set_key)
         );
 
+        CREATE TABLE IF NOT EXISTS user_scaffold (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT UNIQUE NOT NULL,
+            level INTEGER DEFAULT 0
+        );
+
         CREATE TABLE IF NOT EXISTS input_texts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_token TEXT NOT NULL,
@@ -166,6 +172,7 @@ def init_db():
             text_id INTEGER NOT NULL REFERENCES input_texts(id),
             sentence_index INTEGER NOT NULL,
             sentence_text TEXT NOT NULL,
+            english TEXT DEFAULT '',
             difficulty_score REAL,
             read_at TIMESTAMP,
             drilled INTEGER DEFAULT 0,
@@ -220,6 +227,15 @@ def init_db():
             conn.execute(f"SELECT {col} FROM users LIMIT 1")
         except Exception:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col} {defn}")
+
+    # Add english column to input_segments if missing
+    try:
+        conn.execute("SELECT english FROM input_segments LIMIT 1")
+    except Exception:
+        try:
+            conn.execute("ALTER TABLE input_segments ADD COLUMN english TEXT DEFAULT ''")
+        except Exception:
+            pass
 
     conn.commit()
     conn.close()
@@ -1086,8 +1102,12 @@ def get_failed_exercise_topics(user_token, module=None, limit=3):
 # ─── INPUT LAB ─────────────────────────────────────────────────────────
 
 def create_input_text(user_token, title, raw_text, sentences,
-                      difficulty_score, word_count, unknown_count):
-    """Create an input text and its segments. Returns text_id."""
+                      difficulty_score, word_count, unknown_count,
+                      translations=None):
+    """Create an input text and its segments. Returns text_id.
+
+    translations: optional dict mapping sentence text → English translation.
+    """
     conn = get_db()
     cur = conn.execute(
         """INSERT INTO input_texts
@@ -1098,12 +1118,14 @@ def create_input_text(user_token, title, raw_text, sentences,
          difficulty_score, word_count, unknown_count)
     )
     text_id = cur.lastrowid
+    translations = translations or {}
     for i, sent in enumerate(sentences):
+        eng = translations.get(sent, "")
         conn.execute(
             """INSERT INTO input_segments
-               (user_token, text_id, sentence_index, sentence_text)
-               VALUES (?, ?, ?, ?)""",
-            (user_token, text_id, i, sent)
+               (user_token, text_id, sentence_index, sentence_text, english)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user_token, text_id, i, sent, eng)
         )
     conn.commit()
     conn.close()
@@ -1336,3 +1358,27 @@ def get_user_known_words(user_token):
     for r in mined:
         known.add(r["word"].lower())
     return known
+
+
+def get_scaffold_level(user_token):
+    """Return the user's scaffold level (0, 1, or 2). Default 0."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT level FROM user_scaffold WHERE user_token = ?",
+        (user_token,)
+    ).fetchone()
+    conn.close()
+    return row["level"] if row else 0
+
+
+def set_scaffold_level(user_token, level):
+    """Set the user's scaffold level (0, 1, or 2)."""
+    level = max(0, min(2, int(level)))
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO user_scaffold (user_token, level) VALUES (?, ?)
+           ON CONFLICT(user_token) DO UPDATE SET level = ?""",
+        (user_token, level, level)
+    )
+    conn.commit()
+    conn.close()

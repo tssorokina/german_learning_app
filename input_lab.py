@@ -5,8 +5,12 @@ Segments German text into sentences, scores difficulty against user's
 known vocabulary, and prepares bridge drills from content sentences.
 """
 
+import os
 import re
 import random
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Common German abbreviations that end with a period but are not sentence endings
 _ABBREVIATIONS = {
@@ -146,7 +150,52 @@ def difficulty_band(score):
         return "red"
 
 
-def prepare_bridge_drill(sentence_text, sentence_index=0, text_id=0):
+def translate_sentences(sentences):
+    """Translate a list of German sentences to English via DeepL API.
+
+    Returns a dict mapping German sentence → English translation.
+    Falls back gracefully if no API key or on error.
+    """
+    api_key = os.environ.get("DEEPL_API_KEY", "")
+    if not api_key or not sentences:
+        return {}
+
+    import requests
+
+    translations = {}
+    # DeepL accepts up to 50 texts per request
+    batch_size = 50
+    for i in range(0, len(sentences), batch_size):
+        batch = sentences[i:i + batch_size]
+        try:
+            # Detect free vs pro key
+            base_url = (
+                "https://api-free.deepl.com" if api_key.endswith(":fx")
+                else "https://api.deepl.com"
+            )
+            resp = requests.post(
+                f"{base_url}/v2/translate",
+                data={
+                    "auth_key": api_key,
+                    "text": batch,
+                    "source_lang": "DE",
+                    "target_lang": "EN",
+                },
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("translations", [])
+                for sent, tr in zip(batch, results):
+                    translations[sent] = tr.get("text", "")
+            else:
+                logger.warning(f"DeepL returned {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"DeepL translation failed: {e}")
+
+    return translations
+
+
+def prepare_bridge_drill(sentence_text, sentence_index=0, text_id=0, english=""):
     """Convert a sentence into a reconstruction drill template.
 
     Returns a dict compatible with sentences.prepare_exercise().
@@ -161,5 +210,5 @@ def prepare_bridge_drill(sentence_text, sentence_index=0, text_id=0):
         "clause_type": "input_lab",
         "difficulty": 2,  # neutral
         "explanation": "Reconstruct the sentence from your reading text.",
-        "english": "",
+        "english": english,
     }

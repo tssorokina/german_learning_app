@@ -57,13 +57,32 @@
                 p.appendChild(span);
             });
 
+            // Translation toggle button (right side)
+            if (seg.english) {
+                var transBtn = document.createElement("button");
+                transBtn.className = "lab-translate-btn";
+                transBtn.textContent = "EN";
+                transBtn.title = "Show translation";
+                var transDiv = document.createElement("div");
+                transDiv.className = "lab-translation hidden";
+                transDiv.textContent = seg.english;
+
+                transBtn.addEventListener("click", function (e) {
+                    e.stopPropagation();
+                    transDiv.classList.toggle("hidden");
+                    transBtn.classList.toggle("active");
+                });
+
+                p.appendChild(transBtn);
+                p.appendChild(transDiv);
+            }
+
             // Mark as read when clicked/tapped
             p.addEventListener("click", function () {
                 if (!p.classList.contains("read")) {
                     p.classList.add("read");
                     segmentsRead++;
                     updateProgress();
-                    // Notify server
                     fetch("/api/lab/" + data.text_id + "/segment/" + i + "/read", {
                         method: "POST"
                     });

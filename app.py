@@ -46,7 +46,8 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       mark_segment_read as db_mark_segment_read,
                       mark_segment_drilled, mine_word_from_text,
                       get_mined_words, get_segments_for_drill,
-                      get_input_text_stats, get_user_known_words)
+                      get_input_text_stats, get_user_known_words,
+                      get_scaffold_level, set_scaffold_level)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
                        count_by_difficulty, load_generated_verb_sentences)
@@ -63,7 +64,8 @@ from grammar_exercises import (get_exercises_by_module, get_exercise_by_id,
                                load_generated_exercises)
 from generate_exercises import refresh_exercise_banks
 from input_lab import (segment_text, score_difficulty, get_unknown_words,
-                       difficulty_band, prepare_bridge_drill)
+                       difficulty_band, prepare_bridge_drill,
+                       translate_sentences)
 
 logger = logging.getLogger(__name__)
 
@@ -266,15 +268,18 @@ def exercise_page():
     mark_sentence_shown(token, exercise["template_id"])
 
     # Build safe exercise data for the frontend (don't leak correct answers)
+    scaffold = get_scaffold_level(token)
     safe_exercise = {
         "template_id": exercise["template_id"],
         "num_slots": len(exercise["all_slots"]),
+        "slot_prefixes": [s.get("prefix", "") for s in exercise["all_slots"]],
         "slot_suffixes": [s["suffix"] for s in exercise["all_slots"]],
         "verb_indices": exercise["verb_positions"],
         "shuffled_words": exercise["shuffled_words"],
         "clause_type": exercise["clause_type"],
         "difficulty": exercise["difficulty"],
         "english": exercise.get("english", ""),
+        "scaffold_level": scaffold,
     }
 
     return render_template("exercise.html",
@@ -447,9 +452,11 @@ def _serve_reconstruction(ex, module_key, module_info, token, context=None):
 
     mark_sentence_shown(token, exercise["template_id"])
 
+    scaffold = get_scaffold_level(token)
     safe_exercise = {
         "template_id": exercise["template_id"],
         "num_slots": len(exercise["all_slots"]),
+        "slot_prefixes": [s.get("prefix", "") for s in exercise["all_slots"]],
         "slot_suffixes": [s["suffix"] for s in exercise["all_slots"]],
         "verb_indices": exercise["verb_positions"],
         "shuffled_words": exercise["shuffled_words"],
@@ -457,6 +464,7 @@ def _serve_reconstruction(ex, module_key, module_info, token, context=None):
         "difficulty": exercise["difficulty"],
         "module": module_key,
         "english": exercise.get("english", ""),
+        "scaffold_level": scaffold,
         # Extra info for reconstruction exercises with source sentences
         "sentence_a": ex["data"].get("sentence_a", ""),
         "sentence_b": ex["data"].get("sentence_b", ""),
@@ -549,6 +557,46 @@ def _handle_post_check(token, exercise_id, errors, all_correct, data, module, to
         relevant_sets = get_confusion_sets_for_errors(error_cats)
         for set_key in relevant_sets:
             update_confusion_set_state(token, set_key, all_correct)
+
+
+def _build_word_feedback(slot_results):
+    """Build actionable word-level feedback when verb analysis returns nothing.
+
+    Returns a dict with:
+      first_wrong_index, misplaced_words, wrong_count, hint
+    """
+    wrong = []
+    first_idx = None
+    for sr in slot_results:
+        if not sr["is_correct"]:
+            if first_idx is None:
+                first_idx = sr["index"]
+            wrong.append({
+                "word": sr.get("user_word", ""),
+                "expected": sr["correct_word"],
+                "index": sr["index"],
+            })
+
+    if not wrong:
+        return None
+
+    # Build a small window hint around the first wrong word
+    correct_words = [sr["correct_word"] for sr in slot_results]
+    start = max(0, first_idx - 1)
+    end = min(len(correct_words), first_idx + 3)
+    window_hint = " ".join(correct_words[start:end])
+
+    hint_msg = (
+        f"Fix {len(wrong)} word{'s' if len(wrong) != 1 else ''} — "
+        f"look near: \u201e…{window_hint}…\u201c"
+    )
+
+    return {
+        "first_wrong_index": first_idx,
+        "misplaced_words": wrong[:5],
+        "wrong_count": len(wrong),
+        "hint": hint_msg,
+    }
 
 
 # ─── GRAMMAR API ENDPOINTS ────────────────────────────────────────────
@@ -952,6 +1000,12 @@ def api_check_answer():
             response["grammar_rule"] = grammar_ex.get("grammar_rule", "")
             response["grammar_tip"] = grammar_ex.get("grammar_tip", "")
 
+    # Word-level feedback when verb analysis doesn't explain the mistake
+    if not all_correct and not explanations:
+        word_fb = _build_word_feedback(slot_results)
+        if word_fb:
+            response["word_feedback"] = word_fb
+
     return jsonify(response)
 
 
@@ -982,6 +1036,24 @@ def api_regenerate_exercises():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─── SCAFFOLD LEVEL ──────────────────────────────────────────────────
+
+@app.route("/api/scaffold", methods=["GET"])
+def api_get_scaffold():
+    token = get_user_token()
+    return jsonify({"level": get_scaffold_level(token)})
+
+
+@app.route("/api/scaffold", methods=["POST"])
+def api_set_scaffold():
+    token = get_user_token()
+    data = request.get_json()
+    if not data or "level" not in data:
+        return jsonify({"error": "level required"}), 400
+    set_scaffold_level(token, data["level"])
+    return jsonify({"level": get_scaffold_level(token)})
 
 
 # ─── WORD LOOKUP (Wortschatz Leipzig + OpenThesaurus) ─────────────────
@@ -1335,9 +1407,13 @@ def lab_submit():
     if not title:
         title = sentences[0][:50] + ("..." if len(sentences[0]) > 50 else "")
 
+    # Translate via DeepL (graceful fallback if no API key)
+    translations = translate_sentences(sentences)
+
     text_id = create_input_text(
         token, title, raw_text, sentences,
-        overall_score, total_words, unknown_count
+        overall_score, total_words, unknown_count,
+        translations=translations,
     )
     return redirect(url_for("lab_read", text_id=text_id))
 
@@ -1366,6 +1442,7 @@ def lab_read(text_id):
             {
                 "id": seg["id"],
                 "sentence_text": seg["sentence_text"],
+                "english": seg.get("english", ""),
                 "read_at": seg.get("read_at"),
             }
             for seg in text["segments"]
@@ -1455,17 +1532,21 @@ def lab_drill(text_id):
 
     seg = segments[0]
     sentence_text = seg["sentence_text"]
-    template = prepare_bridge_drill(sentence_text, seg["sentence_index"], text_id)
+    seg_english = seg.get("english", "")
+    template = prepare_bridge_drill(sentence_text, seg["sentence_index"], text_id,
+                                    english=seg_english)
     exercise = prepare_exercise(template)
 
     safe_exercise = {
         "template_id": exercise["template_id"],
         "num_slots": len(exercise["all_slots"]),
+        "slot_prefixes": [s.get("prefix", "") for s in exercise["all_slots"]],
         "slot_suffixes": [s["suffix"] for s in exercise["all_slots"]],
         "verb_indices": exercise["verb_positions"],
         "shuffled_words": exercise["shuffled_words"],
         "clause_type": "input_lab",
         "difficulty": 2,
+        "english": exercise.get("english", ""),
     }
 
     # Check if there are more drills available after this one
@@ -1540,12 +1621,20 @@ def api_lab_drill_check():
     # Mark segment as drilled with SM-2 scheduling
     mark_segment_drilled(segment_id, token, all_correct)
 
-    return jsonify({
+    response = {
         "correct": all_correct,
         "full_sentence": exercise["full_text"],
         "explanation": "Reconstruct the sentence from your reading text.",
         "slot_results": slot_results,
-    })
+    }
+
+    # Word-level feedback for wrong answers
+    if not all_correct:
+        word_fb = _build_word_feedback(slot_results)
+        if word_fb:
+            response["word_feedback"] = word_fb
+
+    return jsonify(response)
 
 
 @app.route("/lab/<int:text_id>/summary")
