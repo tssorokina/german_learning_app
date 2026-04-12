@@ -146,6 +146,49 @@ def init_db():
             last_tested TIMESTAMP,
             UNIQUE(user_token, confusion_set_key)
         );
+
+        CREATE TABLE IF NOT EXISTS input_texts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            title TEXT,
+            raw_text TEXT NOT NULL,
+            sentences_json TEXT NOT NULL,
+            difficulty_score REAL,
+            word_count INTEGER,
+            unknown_word_count INTEGER,
+            status TEXT DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS input_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            text_id INTEGER NOT NULL REFERENCES input_texts(id),
+            sentence_index INTEGER NOT NULL,
+            sentence_text TEXT NOT NULL,
+            difficulty_score REAL,
+            read_at TIMESTAMP,
+            drilled INTEGER DEFAULT 0,
+            drill_correct INTEGER DEFAULT 0,
+            ease_factor REAL DEFAULT 2.5,
+            interval_days REAL DEFAULT 1,
+            next_review TIMESTAMP,
+            last_reviewed TIMESTAMP,
+            UNIQUE(user_token, text_id, sentence_index)
+        );
+
+        CREATE TABLE IF NOT EXISTS input_mined_words (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            text_id INTEGER NOT NULL REFERENCES input_texts(id),
+            word TEXT NOT NULL,
+            phrase TEXT,
+            definition TEXT,
+            examples TEXT,
+            source_sentence TEXT,
+            saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_token, text_id, word)
+        );
     """)
 
     # Add module and exercise_type columns to attempts if missing
@@ -1038,3 +1081,258 @@ def get_failed_exercise_topics(user_token, module=None, limit=3):
         if r["rule_id"] not in topics:
             topics.append(r["rule_id"])
     return topics[:limit]
+
+
+# ─── INPUT LAB ─────────────────────────────────────────────────────────
+
+def create_input_text(user_token, title, raw_text, sentences,
+                      difficulty_score, word_count, unknown_count):
+    """Create an input text and its segments. Returns text_id."""
+    conn = get_db()
+    cur = conn.execute(
+        """INSERT INTO input_texts
+           (user_token, title, raw_text, sentences_json,
+            difficulty_score, word_count, unknown_word_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (user_token, title, raw_text, json.dumps(sentences, ensure_ascii=False),
+         difficulty_score, word_count, unknown_count)
+    )
+    text_id = cur.lastrowid
+    for i, sent in enumerate(sentences):
+        conn.execute(
+            """INSERT INTO input_segments
+               (user_token, text_id, sentence_index, sentence_text)
+               VALUES (?, ?, ?, ?)""",
+            (user_token, text_id, i, sent)
+        )
+    conn.commit()
+    conn.close()
+    return text_id
+
+
+def get_input_text(text_id, user_token=None):
+    """Fetch a single input text with its segments."""
+    conn = get_db()
+    query = "SELECT * FROM input_texts WHERE id = ?"
+    params = [text_id]
+    if user_token:
+        query += " AND user_token = ?"
+        params.append(user_token)
+    text_row = conn.execute(query, params).fetchone()
+    if not text_row:
+        conn.close()
+        return None
+    text = dict(text_row)
+    text["sentences"] = json.loads(text["sentences_json"])
+
+    segments = conn.execute(
+        """SELECT * FROM input_segments
+           WHERE text_id = ? AND user_token = ?
+           ORDER BY sentence_index""",
+        (text_id, text["user_token"])
+    ).fetchall()
+    text["segments"] = [dict(s) for s in segments]
+    conn.close()
+    return text
+
+
+def get_input_texts(user_token):
+    """List all input texts for a user."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT id, title, difficulty_score, word_count, unknown_word_count,
+                  status, created_at
+           FROM input_texts WHERE user_token = ?
+           ORDER BY created_at DESC""",
+        (user_token,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_segment_read(segment_id, user_token):
+    """Mark a segment as read."""
+    conn = get_db()
+    conn.execute(
+        "UPDATE input_segments SET read_at = ? WHERE id = ? AND user_token = ?",
+        (datetime.now().isoformat(), segment_id, user_token)
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_segment_drilled(segment_id, user_token, was_correct):
+    """Mark a segment as drilled and update SM-2 scheduling."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM input_segments WHERE id = ? AND user_token = ?",
+        (segment_id, user_token)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return
+
+    seg = dict(row)
+    ef = seg["ease_factor"]
+    interval = seg["interval_days"]
+
+    if was_correct:
+        ef = max(1.3, ef + 0.1)
+        interval = interval * ef
+    else:
+        ef = max(1.3, ef - 0.2)
+        interval = 1
+
+    now = datetime.now()
+    next_review = (now + timedelta(days=interval)).isoformat()
+
+    conn.execute(
+        """UPDATE input_segments
+           SET drilled = 1, drill_correct = ?, ease_factor = ?,
+               interval_days = ?, next_review = ?, last_reviewed = ?
+           WHERE id = ? AND user_token = ?""",
+        (1 if was_correct else 0, ef, interval, next_review,
+         now.isoformat(), segment_id, user_token)
+    )
+    conn.commit()
+    conn.close()
+
+
+def mine_word_from_text(user_token, text_id, word, phrase, definition,
+                        examples, source_sentence):
+    """Mine a word from an input text. Enforces max 5 per text."""
+    conn = get_db()
+    count = conn.execute(
+        "SELECT COUNT(*) as c FROM input_mined_words WHERE user_token = ? AND text_id = ?",
+        (user_token, text_id)
+    ).fetchone()["c"]
+    if count >= 5:
+        conn.close()
+        return {"error": "Maximum 5 words per text", "count": count}
+
+    try:
+        conn.execute(
+            """INSERT INTO input_mined_words
+               (user_token, text_id, word, phrase, definition, examples, source_sentence)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_token, text_id, word, phrase, definition, examples, source_sentence)
+        )
+        conn.commit()
+        new_count = count + 1
+    except Exception:
+        conn.close()
+        return {"error": "Word already mined", "count": count}
+
+    conn.close()
+
+    # Also save to global saved_words
+    save_word(user_token, word, definition, examples, source_sentence)
+
+    return {"count": new_count}
+
+
+def get_mined_words(user_token, text_id):
+    """Get mined words for a text."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT * FROM input_mined_words
+           WHERE user_token = ? AND text_id = ?
+           ORDER BY saved_at""",
+        (user_token, text_id)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_segments_for_drill(text_id, user_token, limit=1):
+    """Get segments for bridge drills: undrilled first, then due for review."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+
+    # First: undrilled segments that have been read
+    rows = conn.execute(
+        """SELECT * FROM input_segments
+           WHERE text_id = ? AND user_token = ? AND drilled = 0
+                 AND read_at IS NOT NULL
+           ORDER BY sentence_index LIMIT ?""",
+        (text_id, user_token, limit)
+    ).fetchall()
+
+    if not rows:
+        # Then: segments due for review
+        rows = conn.execute(
+            """SELECT * FROM input_segments
+               WHERE text_id = ? AND user_token = ?
+                     AND next_review IS NOT NULL AND next_review <= ?
+               ORDER BY next_review ASC LIMIT ?""",
+            (text_id, user_token, now, limit)
+        ).fetchall()
+
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_input_text_stats(text_id, user_token):
+    """Get stats for a text: segments read, drilled, mined words."""
+    conn = get_db()
+    total = conn.execute(
+        "SELECT COUNT(*) as c FROM input_segments WHERE text_id = ? AND user_token = ?",
+        (text_id, user_token)
+    ).fetchone()["c"]
+    read_count = conn.execute(
+        "SELECT COUNT(*) as c FROM input_segments WHERE text_id = ? AND user_token = ? AND read_at IS NOT NULL",
+        (text_id, user_token)
+    ).fetchone()["c"]
+    drilled = conn.execute(
+        "SELECT COUNT(*) as c FROM input_segments WHERE text_id = ? AND user_token = ? AND drilled = 1",
+        (text_id, user_token)
+    ).fetchone()["c"]
+    correct = conn.execute(
+        "SELECT COUNT(*) as c FROM input_segments WHERE text_id = ? AND user_token = ? AND drill_correct = 1",
+        (text_id, user_token)
+    ).fetchone()["c"]
+    mined = conn.execute(
+        "SELECT COUNT(*) as c FROM input_mined_words WHERE text_id = ? AND user_token = ?",
+        (text_id, user_token)
+    ).fetchone()["c"]
+    conn.close()
+    return {
+        "total_segments": total,
+        "read": read_count,
+        "drilled": drilled,
+        "drill_correct": correct,
+        "mined_words": mined,
+    }
+
+
+def delete_input_text(text_id, user_token):
+    """Delete an input text and all its segments and mined words."""
+    conn = get_db()
+    conn.execute("DELETE FROM input_mined_words WHERE text_id = ? AND user_token = ?",
+                 (text_id, user_token))
+    conn.execute("DELETE FROM input_segments WHERE text_id = ? AND user_token = ?",
+                 (text_id, user_token))
+    conn.execute("DELETE FROM input_texts WHERE id = ? AND user_token = ?",
+                 (text_id, user_token))
+    conn.commit()
+    conn.close()
+
+
+def get_user_known_words(user_token):
+    """Build the set of words the user knows from saved_words + mined_words."""
+    conn = get_db()
+    saved = conn.execute(
+        "SELECT word FROM saved_words WHERE user_token = ?",
+        (user_token,)
+    ).fetchall()
+    mined = conn.execute(
+        "SELECT word FROM input_mined_words WHERE user_token = ?",
+        (user_token,)
+    ).fetchall()
+    conn.close()
+    known = set()
+    for r in saved:
+        known.add(r["word"].lower())
+    for r in mined:
+        known.add(r["word"].lower())
+    return known

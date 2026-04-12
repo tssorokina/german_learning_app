@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}No Drills — Input Lab{% endblock %}
+
+{% block content %}
+<div class="lab-container" style="text-align:center; padding-top:60px;">
+    <h2>All drills completed!</h2>
+    <p class="auth-subtitle">No more sentences to drill right now. Come back later for spaced reviews.</p>
+    <div class="action-bar" style="margin-top:24px;">
+        <a href="/lab/{{ text_id }}/summary" class="btn btn-primary">View Summary</a>
+        <a href="/lab" class="btn btn-secondary">Back to Lab</a>
+    </div>
+</div>
+{% endblock %}

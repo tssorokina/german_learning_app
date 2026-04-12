@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Summary — Input Lab{% endblock %}
+
+{% block content %}
+<div class="lab-container">
+    <h1>Session Summary</h1>
+    <p class="auth-subtitle">{{ text_title or 'Your text' }}</p>
+
+    <div class="lab-stats-grid">
+        <div class="lab-stat-card">
+            <div class="lab-stat-value">{{ stats.read }}/{{ stats.total_segments }}</div>
+            <div class="lab-stat-label">Sentences Read</div>
+        </div>
+        <div class="lab-stat-card">
+            <div class="lab-stat-value">{{ stats.mined_words }}</div>
+            <div class="lab-stat-label">Words Mined</div>
+        </div>
+        <div class="lab-stat-card">
+            <div class="lab-stat-value">{{ stats.drilled }}</div>
+            <div class="lab-stat-label">Drills Done</div>
+        </div>
+        <div class="lab-stat-card">
+            <div class="lab-stat-value">{{ stats.drill_correct }}</div>
+            <div class="lab-stat-label">Drills Correct</div>
+        </div>
+    </div>
+
+    {% if mined_words %}
+    <h2 class="section-heading">Mined Words</h2>
+    <div class="lab-word-list">
+        {% for w in mined_words %}
+        <div class="lab-word-item">
+            <strong>{{ w.word }}</strong>{% if w.phrase %} &mdash; {{ w.phrase }}{% endif %}
+            {% if w.definition %}<div class="def">{{ w.definition }}</div>{% endif %}
+            {% if w.source_sentence %}<div class="src">&ldquo;{{ w.source_sentence }}&rdquo;</div>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="action-bar" style="margin-top:24px;">
+        <a href="/lab/{{ text_id }}/read" class="btn btn-primary">Re-read</a>
+        <a href="/lab/{{ text_id }}/drill" class="btn btn-secondary">More Drills</a>
+        <a href="/lab" class="btn btn-secondary">Back to Lab</a>
+    </div>
+</div>
+{% endblock %}

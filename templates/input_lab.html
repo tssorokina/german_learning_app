@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Input Lab — Grammar Torture Chamber{% endblock %}
+
+{% block content %}
+<div class="lab-container">
+    <h1>Input Lab</h1>
+    <p class="auth-subtitle">Paste a German text to read, mine vocabulary, and practice with real sentences.</p>
+
+    <form method="POST" action="/lab/submit">
+        <input type="text" name="title" class="lab-title-input" placeholder="Title (optional)">
+        <textarea name="raw_text" class="lab-textarea" placeholder="Paste your German text here..." required></textarea>
+        <div style="margin-top: 12px;">
+            <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">Analyse &amp; Read</button>
+        </div>
+    </form>
+
+    {% if texts %}
+    <h2 class="section-heading" style="margin-top: 32px;">Your Texts</h2>
+    <div class="lab-text-list">
+        {% for t in texts %}
+        <a href="/lab/{{ t.id }}/read" class="lab-text-card">
+            <div class="lab-card-info">
+                <div class="lab-card-title">{{ t.title or 'Untitled' }}</div>
+                <div class="lab-card-meta">{{ t.word_count }} words &middot; {{ t.unknown_word_count }} unknown &middot; {{ t.created_at[:10] }}</div>
+            </div>
+            {% set band = 'green' if t.difficulty_score >= 0.98 else ('amber' if t.difficulty_score >= 0.95 else 'red') %}
+            <span class="lab-diff-badge lab-diff-{{ band }}">{{ (t.difficulty_score * 100)|round|int }}%</span>
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

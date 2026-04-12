@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Mine Words — Input Lab{% endblock %}
+
+{% block content %}
+<div class="lab-container">
+    <div class="lab-mine-header">
+        <h2>Mine Words</h2>
+        <span id="mine-counter" class="lab-mine-counter">{{ mined_count }}/5</span>
+    </div>
+    <p class="instruction-hint" style="margin-bottom:16px;">Tap a word to look it up. Click "Mine" to save it (max 5 per text).</p>
+
+    <div id="mine-tray" class="lab-mine-tray">
+        {% for w in mined_words %}
+        <span class="lab-mined-chip">{{ w.word }}</span>
+        {% endfor %}
+    </div>
+
+    <div id="sentences-area"></div>
+
+    <div class="action-bar" style="margin-top:24px;">
+        <a href="/lab/{{ text_id }}/drill" class="btn btn-primary">Continue to Drills</a>
+        <a href="/lab/{{ text_id }}/summary" class="btn btn-secondary">Skip to Summary</a>
+    </div>
+</div>
+
+<script>
+    const LAB_MINE_DATA = {{ mine_data|safe }};
+</script>
+<script src="{{ url_for('static', filename='js/input_lab_mine.js') }}"></script>
+{% endblock %}

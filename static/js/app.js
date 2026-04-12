@@ -252,11 +252,32 @@
         btnCheck.disabled = !allFilled;
     }
 
-    // ─── DUDEN POPUP ─────────────────────────────────────
+    // ─── WORD LOOKUP POPUP ─────────────────────────────────
     let currentPopup = null;
 
+    function _renderLookupBody(data) {
+        let html = "";
+        if (data.frequency != null) {
+            html += `<div class="duden-wordtype">Häufigkeit: ${data.frequency.toLocaleString()} (Klasse ${data.frequency_class})</div>`;
+        }
+        if (data.synonyms && data.synonyms.length) {
+            html += `<div class="duden-def"><strong>Synonyme:</strong> ${data.synonyms.join(", ")}</div>`;
+        }
+        if (data.collocations && data.collocations.length) {
+            html += `<div class="duden-def"><strong>Kollokationen:</strong> ${data.collocations.join(", ")}</div>`;
+        }
+        if (data.examples && data.examples.length) {
+            html += `<div class="duden-examples"><strong>Beispiele:</strong><ul>`;
+            data.examples.forEach(ex => { html += `<li>${ex}</li>`; });
+            html += `</ul></div>`;
+        }
+        if (!html) {
+            html = `<div class="duden-def">Keine Informationen gefunden.</div>`;
+        }
+        return html;
+    }
+
     function showDudenPopup(word, chipEl) {
-        // Close any existing popup
         closeDudenPopup();
 
         const popup = document.createElement("div");
@@ -267,20 +288,19 @@
                 <button class="duden-close-btn" title="Schlie\u00dfen">&times;</button>
             </div>
             <div class="duden-popup-body">
-                <div class="duden-loading">Lade Definition...</div>
+                <div class="duden-loading">Lade...</div>
             </div>
             <div class="duden-popup-actions">
                 <button class="btn btn-primary btn-sm duden-save-btn" disabled>Wort speichern</button>
-                <a class="btn btn-secondary btn-sm duden-link-btn" href="https://www.duden.de/rechtschreibung/${encodeURIComponent(word)}" target="_blank" rel="noopener">Duden.de</a>
+                <a class="btn btn-secondary btn-sm duden-link-btn" href="https://www.openthesaurus.de/synonyme/${encodeURIComponent(word)}" target="_blank" rel="noopener">OpenThesaurus</a>
             </div>
         `;
 
         document.body.appendChild(popup);
         currentPopup = popup;
 
-        // Position popup near the chip
         const chipRect = chipEl.getBoundingClientRect();
-        const popupHeight = 280;
+        const popupHeight = 300;
         let top = chipRect.top - popupHeight - 8;
         if (top < 10) top = chipRect.bottom + 8;
         let left = chipRect.left;
@@ -289,45 +309,28 @@
         popup.style.top = top + "px";
         popup.style.left = left + "px";
 
-        // Close button
         popup.querySelector(".duden-close-btn").addEventListener("click", closeDudenPopup);
 
-        // Fetch definition
-        let dudenData = null;
+        let lookupData = null;
         fetch(`/api/duden/${encodeURIComponent(word)}`)
             .then(r => r.json())
             .then(data => {
-                dudenData = data;
-                const body = popup.querySelector(".duden-popup-body");
-                let html = "";
-                if (data.word_type) {
-                    html += `<div class="duden-wordtype">${data.word_type}</div>`;
-                }
-                html += `<div class="duden-def">${data.definition}</div>`;
-                if (data.examples && data.examples.length > 0) {
-                    html += `<div class="duden-examples"><strong>Beispiele:</strong><ul>`;
-                    data.examples.forEach(ex => {
-                        html += `<li>${ex}</li>`;
-                    });
-                    html += `</ul></div>`;
-                }
-                body.innerHTML = html;
+                lookupData = data;
+                popup.querySelector(".duden-popup-body").innerHTML = _renderLookupBody(data);
 
-                // Enable save button
                 const saveBtn = popup.querySelector(".duden-save-btn");
                 saveBtn.disabled = false;
                 saveBtn.addEventListener("click", () => {
-                    saveWordToVocab(dudenData);
+                    saveWordToVocab(lookupData);
                     saveBtn.textContent = "Gespeichert!";
                     saveBtn.disabled = true;
                 });
             })
             .catch(() => {
-                const body = popup.querySelector(".duden-popup-body");
-                body.innerHTML = '<div class="duden-def">Fehler beim Laden. Versuchen Sie es auf duden.de direkt.</div>';
+                popup.querySelector(".duden-popup-body").innerHTML =
+                    '<div class="duden-def">Fehler beim Laden.</div>';
             });
 
-        // Close on clicking outside
         setTimeout(() => {
             document.addEventListener("click", onClickOutsidePopup);
         }, 100);
@@ -348,15 +351,23 @@
         }
     }
 
-    function saveWordToVocab(dudenData) {
+    function saveWordToVocab(lookupData) {
         const sourceSentence = exercise.template_id;
+        const defParts = [];
+        if (lookupData.synonyms && lookupData.synonyms.length)
+            defParts.push("Synonyme: " + lookupData.synonyms.join(", "));
+        if (lookupData.collocations && lookupData.collocations.length)
+            defParts.push("Kollokationen: " + lookupData.collocations.join(", "));
+        if (lookupData.frequency != null)
+            defParts.push("Häufigkeit: " + lookupData.frequency.toLocaleString());
+
         fetch("/api/words", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                word: dudenData.word,
-                definition: dudenData.definition,
-                examples: (dudenData.examples || []).join("\n"),
+                word: lookupData.word,
+                definition: defParts.join(" · ") || lookupData.definition,
+                examples: (lookupData.examples || []).join("\n"),
                 source_sentence: sourceSentence
             })
         });

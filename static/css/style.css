@@ -1530,3 +1530,170 @@ body {
         margin-bottom: 4px;
     }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   INPUT LAB
+   ═══════════════════════════════════════════════════════════ */
+.lab-container { padding-top: 8px; }
+
+.lab-textarea {
+    width: 100%;
+    min-height: 180px;
+    padding: 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 1rem;
+    font-family: inherit;
+    line-height: 1.6;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.2s;
+}
+.lab-textarea:focus { border-color: var(--accent); }
+.lab-textarea::placeholder { color: var(--text-dim); }
+
+.lab-title-input {
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 1rem;
+    outline: none;
+    margin-bottom: 12px;
+}
+.lab-title-input:focus { border-color: var(--accent); }
+
+.lab-text-list { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+
+.lab-text-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color 0.2s;
+}
+.lab-text-card:hover { border-color: var(--accent); }
+.lab-card-info { flex: 1; }
+.lab-card-title { font-weight: 600; font-size: 0.95rem; }
+.lab-card-meta { font-size: 0.8rem; color: var(--text-dim); margin-top: 2px; }
+
+.lab-diff-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+}
+.lab-diff-green { background: rgba(74,222,128,0.15); color: var(--success); }
+.lab-diff-amber { background: rgba(251,191,36,0.15); color: var(--warning); }
+.lab-diff-red { background: rgba(248,113,113,0.15); color: var(--error); }
+
+/* ─── Flow Reader ─────────────────────────── */
+.lab-progress { height: 4px; background: var(--surface2); border-radius: 2px; margin-bottom: 16px; }
+.lab-progress-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s; width: 0%; }
+
+.lab-sentence {
+    padding: 8px 0;
+    line-height: 1.8;
+    font-size: 1.1rem;
+    border-bottom: 1px solid var(--border);
+}
+.lab-sentence:last-child { border-bottom: none; }
+.lab-sentence.read { opacity: 0.6; }
+
+.lab-word {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: background 0.15s;
+    display: inline;
+}
+.lab-word:hover { background: var(--surface2); }
+.lab-word.unknown { border-bottom: 2px dotted var(--accent); }
+.lab-word.mined { background: rgba(99,102,241,0.2); border-bottom: 2px solid var(--accent); }
+.lab-word.saved { background: rgba(34,197,94,0.15); border-bottom: 2px solid var(--success); }
+
+.lab-floating-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 12px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    z-index: 50;
+}
+
+/* ─── Mining ──────────────────────────────── */
+.lab-mine-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+.lab-mine-counter {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--accent);
+    padding: 4px 12px;
+    background: rgba(99,102,241,0.15);
+    border-radius: var(--radius-sm);
+}
+.lab-mine-tray {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    min-height: 48px;
+}
+.lab-mined-chip {
+    padding: 6px 12px;
+    background: rgba(99,102,241,0.2);
+    color: var(--accent);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+/* ─── Summary ─────────────────────────────── */
+.lab-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+}
+.lab-stat-card {
+    padding: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    text-align: center;
+}
+.lab-stat-value { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
+.lab-stat-label { font-size: 0.8rem; color: var(--text-dim); margin-top: 4px; }
+
+.lab-word-list { display: flex; flex-direction: column; gap: 8px; }
+.lab-word-item {
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.lab-word-item strong { color: var(--accent); }
+.lab-word-item .def { color: var(--text-dim); font-size: 0.9rem; margin-top: 4px; }
+.lab-word-item .src { font-style: italic; color: var(--text-dim); font-size: 0.85rem; margin-top: 4px; }

@@ -41,7 +41,12 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       get_fluency_score, get_confidence_calibration,
                       get_scaffold_dependence, get_all_transfer_progress,
                       register_user, authenticate_user, get_user_by_token,
-                      merge_anonymous_into_user)
+                      merge_anonymous_into_user,
+                      create_input_text, get_input_text, get_input_texts,
+                      mark_segment_read as db_mark_segment_read,
+                      mark_segment_drilled, mine_word_from_text,
+                      get_mined_words, get_segments_for_drill,
+                      get_input_text_stats, get_user_known_words)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
                        count_by_difficulty, load_generated_verb_sentences)
@@ -57,6 +62,8 @@ from grammar_exercises import (get_exercises_by_module, get_exercise_by_id,
                                count_by_module_and_level, ALL_GRAMMAR_EXERCISES,
                                load_generated_exercises)
 from generate_exercises import refresh_exercise_banks
+from input_lab import (segment_text, score_difficulty, get_unknown_words,
+                       difficulty_band, prepare_bridge_drill)
 
 logger = logging.getLogger(__name__)
 
@@ -977,90 +984,110 @@ def api_regenerate_exercises():
         return jsonify({"error": str(e)}), 500
 
 
-# ─── DUDEN LOOKUP ─────────────────────────────────────────────────────
+# ─── WORD LOOKUP (Wortschatz Leipzig + OpenThesaurus) ─────────────────
+
+_WORTSCHATZ_CORPUS = "deu_news_2012_3M"
+_WORTSCHATZ_BASE = "https://api.wortschatz-leipzig.de/ws"
+_OPENTHESAURUS_URL = "https://www.openthesaurus.de/synonyme/search"
 
 @app.route("/api/duden/<word>", methods=["GET"])
 def api_duden_lookup(word):
-    """Proxy lookup for Duden dictionary definitions (German only)."""
+    """Look up a German word via Wortschatz Leipzig (examples, frequency,
+    collocations) and OpenThesaurus (synonyms)."""
     import requests
-    from bs4 import BeautifulSoup
 
-    word_clean = word.strip().lower()
-    url = f"https://www.duden.de/rechtschreibung/{word_clean}"
-    definition = ""
+    word_clean = word.strip()
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; GermanLearningApp/1.0)"}
+    frequency = None
+    frequency_class = None
     examples = []
-    word_type = ""
+    collocations = []
+    synonyms = []
 
+    # ── Wortschatz Leipzig: word info (frequency) ─────────────────────
     try:
-        resp = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; GermanLearningApp/1.0)"
-        }, timeout=5)
-
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # Extract word type (Wortart)
-            wortart = soup.select_one('[class*="Wortart"]')
-            if not wortart:
-                wortart = soup.select_one('.tuple__val')
-            if wortart:
-                word_type = wortart.get_text(strip=True)
-
-            # Extract definitions (Bedeutungen)
-            meanings = soup.select('[id*="bedeutung"] li, [class*="bedeutung"] li, .enumeration__text')
-            if meanings:
-                definition = "; ".join(
-                    m.get_text(strip=True) for m in meanings[:3]
-                )
-            if not definition:
-                # Fallback: try the first text block under Bedeutung
-                bed_section = soup.select_one('[id*="bedeutung"]')
-                if bed_section:
-                    definition = bed_section.get_text(strip=True)[:300]
-
-            # Extract examples (Beispiele)
-            example_els = soup.select('[class*="note__list"] li, .beispiel, [class*="Beispiel"] li')
-            for ex in example_els[:3]:
-                examples.append(ex.get_text(strip=True))
-
-        if not definition:
-            # Try alternate URL format
-            resp2 = requests.get(
-                f"https://www.duden.de/suchen/dudenonline/{word_clean}",
-                headers={"User-Agent": "Mozilla/5.0 (compatible; GermanLearningApp/1.0)"},
-                timeout=5
-            )
-            if resp2.status_code == 200:
-                soup2 = BeautifulSoup(resp2.text, "html.parser")
-                first_result = soup2.select_one('.vignette__link')
-                if first_result and first_result.get('href'):
-                    result_url = "https://www.duden.de" + first_result['href']
-                    resp3 = requests.get(result_url, headers={
-                        "User-Agent": "Mozilla/5.0 (compatible; GermanLearningApp/1.0)"
-                    }, timeout=5)
-                    if resp3.status_code == 200:
-                        soup3 = BeautifulSoup(resp3.text, "html.parser")
-                        meanings3 = soup3.select('[id*="bedeutung"] li, .enumeration__text')
-                        if meanings3:
-                            definition = "; ".join(
-                                m.get_text(strip=True) for m in meanings3[:3]
-                            )
-                        example_els3 = soup3.select('[class*="note__list"] li, .beispiel')
-                        for ex in example_els3[:3]:
-                            examples.append(ex.get_text(strip=True))
-
+        r = requests.get(
+            f"{_WORTSCHATZ_BASE}/words/{_WORTSCHATZ_CORPUS}/word/{word_clean}",
+            headers=headers, timeout=5,
+        )
+        if r.status_code == 200:
+            d = r.json()
+            frequency = d.get("freq")
+            frequency_class = d.get("frequencyClass")
     except Exception:
         pass
 
-    if not definition:
-        definition = f"Keine Definition gefunden. Bitte suchen Sie auf duden.de nach '{word_clean}'."
+    # ── Wortschatz Leipzig: example sentences ─────────────────────────
+    try:
+        r = requests.get(
+            f"{_WORTSCHATZ_BASE}/sentences/{_WORTSCHATZ_CORPUS}/sentences/{word_clean}",
+            params={"offset": 0, "limit": 4},
+            headers=headers, timeout=5,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            for s in data.get("sentences", [])[:4]:
+                examples.append(s.get("sentence", ""))
+    except Exception:
+        pass
+
+    # ── Wortschatz Leipzig: collocations ──────────────────────────────
+    try:
+        r = requests.get(
+            f"{_WORTSCHATZ_BASE}/cooccurrences/{_WORTSCHATZ_CORPUS}/cooccurrences/{word_clean}",
+            params={"offset": 0, "limit": 6},
+            headers=headers, timeout=5,
+        )
+        if r.status_code == 200:
+            for item in r.json()[:6]:
+                w2 = item.get("w2", {}).get("word", "")
+                if w2:
+                    collocations.append(w2)
+    except Exception:
+        pass
+
+    # ── OpenThesaurus: synonyms ───────────────────────────────────────
+    try:
+        r = requests.get(
+            _OPENTHESAURUS_URL,
+            params={"q": word_clean, "format": "application/json"},
+            headers=headers, timeout=5,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            for synset in data.get("synsets", [])[:2]:
+                for term in synset.get("terms", []):
+                    t = term.get("term", "")
+                    if t.lower() != word_clean.lower() and t not in synonyms:
+                        synonyms.append(t)
+                        if len(synonyms) >= 6:
+                            break
+                if len(synonyms) >= 6:
+                    break
+    except Exception:
+        pass
+
+    # Build a human-readable definition summary
+    parts = []
+    if frequency is not None:
+        parts.append(f"Häufigkeit: {frequency:,} (Klasse {frequency_class})")
+    if collocations:
+        parts.append("Kollokationen: " + ", ".join(collocations))
+    if synonyms:
+        parts.append("Synonyme: " + ", ".join(synonyms))
+    definition = " · ".join(parts) if parts else (
+        f"Keine Informationen gefunden für '{word_clean}'."
+    )
 
     return jsonify({
         "word": word_clean,
-        "word_type": word_type,
+        "word_type": "",
         "definition": definition,
         "examples": examples,
-        "duden_url": f"https://www.duden.de/rechtschreibung/{word_clean}"
+        "frequency": frequency,
+        "frequency_class": frequency_class,
+        "collocations": collocations,
+        "synonyms": synonyms,
     })
 
 
@@ -1272,6 +1299,273 @@ def backup_info():
         }
 
     return {'database_exists': False}
+
+
+# ─── INPUT LAB ─────────────────────────────────────────────────────────
+
+@app.route("/lab")
+def lab_index():
+    """Input Lab landing page — paste text or view previous texts."""
+    token = get_user_token()
+    texts = get_input_texts(token)
+    return render_template("input_lab.html", texts=texts)
+
+
+@app.route("/lab/submit", methods=["POST"])
+def lab_submit():
+    """Process pasted German text: segment, score, store."""
+    token = get_user_token()
+    raw_text = request.form.get("raw_text", "").strip()
+    title = request.form.get("title", "").strip()
+
+    if not raw_text:
+        flash("Please paste some text.", "error")
+        return redirect(url_for("lab_index"))
+
+    sentences = segment_text(raw_text)
+    if not sentences:
+        flash("Could not find any sentences in the text.", "error")
+        return redirect(url_for("lab_index"))
+
+    known_words = get_user_known_words(token)
+    overall_score, per_sentence, total_words, unknown_count = score_difficulty(
+        sentences, known_words
+    )
+
+    if not title:
+        title = sentences[0][:50] + ("..." if len(sentences[0]) > 50 else "")
+
+    text_id = create_input_text(
+        token, title, raw_text, sentences,
+        overall_score, total_words, unknown_count
+    )
+    return redirect(url_for("lab_read", text_id=text_id))
+
+
+@app.route("/lab/<int:text_id>/read")
+def lab_read(text_id):
+    """Flow mode reader for an input text."""
+    token = get_user_token()
+    text = get_input_text(text_id, token)
+    if not text:
+        abort(404)
+
+    known_words = get_user_known_words(token)
+    overall_score = text["difficulty_score"]
+    band = difficulty_band(overall_score)
+    coverage_pct = round(overall_score * 100)
+
+    # Build unknown word list for highlighting
+    unknown = set()
+    for sent in text["sentences"]:
+        unknown.update(w.lower() for w in get_unknown_words(sent, known_words))
+
+    text_data = {
+        "text_id": text_id,
+        "segments": [
+            {
+                "id": seg["id"],
+                "sentence_text": seg["sentence_text"],
+                "read_at": seg.get("read_at"),
+            }
+            for seg in text["segments"]
+        ],
+        "unknown_words": list(unknown),
+    }
+
+    return render_template(
+        "input_lab_read.html",
+        text_id=text_id,
+        text_title=text["title"],
+        difficulty_band=band,
+        coverage_pct=coverage_pct,
+        text_data=json.dumps(text_data),
+    )
+
+
+@app.route("/api/lab/<int:text_id>/segment/<int:segment_index>/read", methods=["POST"])
+def api_lab_segment_read(text_id, segment_index):
+    """Mark a segment as read."""
+    token = get_user_token()
+    text = get_input_text(text_id, token)
+    if not text:
+        return jsonify({"error": "not found"}), 404
+
+    if segment_index < len(text["segments"]):
+        seg = text["segments"][segment_index]
+        db_mark_segment_read(seg["id"], token)
+
+    return jsonify({"status": "ok"})
+
+
+@app.route("/lab/<int:text_id>/mine")
+def lab_mine(text_id):
+    """Mining page — tap words to look up and mine vocabulary."""
+    token = get_user_token()
+    text = get_input_text(text_id, token)
+    if not text:
+        abort(404)
+
+    mined = get_mined_words(token, text_id)
+    mine_data = {
+        "text_id": text_id,
+        "sentences": text["sentences"],
+        "mined_count": len(mined),
+    }
+
+    return render_template(
+        "input_lab_mine.html",
+        text_id=text_id,
+        mined_count=len(mined),
+        mined_words=mined,
+        mine_data=json.dumps(mine_data),
+    )
+
+
+@app.route("/api/lab/<int:text_id>/mine", methods=["POST"])
+def api_lab_mine(text_id):
+    """Mine a word from an input text."""
+    token = get_user_token()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "no data"}), 400
+
+    result = mine_word_from_text(
+        token, text_id,
+        word=data.get("word", ""),
+        phrase=data.get("phrase", ""),
+        definition=data.get("definition", ""),
+        examples=data.get("examples", ""),
+        source_sentence=data.get("source_sentence", ""),
+    )
+    return jsonify(result)
+
+
+@app.route("/lab/<int:text_id>/drill")
+def lab_drill(text_id):
+    """Bridge drill page — reconstruction exercise from text sentences."""
+    token = get_user_token()
+    text = get_input_text(text_id, token)
+    if not text:
+        abort(404)
+
+    segments = get_segments_for_drill(text_id, token, limit=1)
+    if not segments:
+        return render_template("input_lab_no_drills.html", text_id=text_id)
+
+    seg = segments[0]
+    sentence_text = seg["sentence_text"]
+    template = prepare_bridge_drill(sentence_text, seg["sentence_index"], text_id)
+    exercise = prepare_exercise(template)
+
+    safe_exercise = {
+        "template_id": exercise["template_id"],
+        "num_slots": len(exercise["all_slots"]),
+        "slot_suffixes": [s["suffix"] for s in exercise["all_slots"]],
+        "verb_indices": exercise["verb_positions"],
+        "shuffled_words": exercise["shuffled_words"],
+        "clause_type": "input_lab",
+        "difficulty": 2,
+    }
+
+    # Check if there are more drills available after this one
+    more_segments = get_segments_for_drill(text_id, token, limit=2)
+    has_more = len(more_segments) > 1
+
+    drill_meta = {
+        "segment_id": seg["id"],
+        "text_id": text_id,
+    }
+
+    return render_template(
+        "input_lab_drill.html",
+        text_id=text_id,
+        exercise=json.dumps(safe_exercise),
+        drill_meta=json.dumps(drill_meta),
+        has_more_drills=has_more,
+    )
+
+
+@app.route("/api/lab/drill/check", methods=["POST"])
+def api_lab_drill_check():
+    """Check a bridge drill answer."""
+    token = get_user_token()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "no data"}), 400
+
+    segment_id = data.get("segment_id")
+    text_id = data.get("text_id")
+    user_positions = data.get("positions", [])
+    template_id = data.get("template_id")
+
+    # Look up the segment to get the original sentence
+    text = get_input_text(text_id, token)
+    if not text:
+        return jsonify({"error": "text not found"}), 404
+
+    # Find the segment
+    seg = None
+    for s in text["segments"]:
+        if s["id"] == segment_id:
+            seg = s
+            break
+    if not seg:
+        return jsonify({"error": "segment not found"}), 404
+
+    # Rebuild the exercise to check against
+    template = prepare_bridge_drill(seg["sentence_text"], seg["sentence_index"], text_id)
+    exercise = prepare_exercise(template)
+
+    all_slots = exercise["all_slots"]
+    slot_results = []
+    all_correct = True
+    for slot in all_slots:
+        idx = slot["index"]
+        user_word = None
+        for up in user_positions:
+            if up["slot_index"] == idx:
+                user_word = up["word"]
+                break
+        is_correct = (user_word == slot["correct_word"])
+        if not is_correct:
+            all_correct = False
+        slot_results.append({
+            "index": idx,
+            "correct_word": slot["correct_word"],
+            "user_word": user_word,
+            "is_correct": is_correct,
+        })
+
+    # Mark segment as drilled with SM-2 scheduling
+    mark_segment_drilled(segment_id, token, all_correct)
+
+    return jsonify({
+        "correct": all_correct,
+        "full_sentence": exercise["full_text"],
+        "explanation": "Reconstruct the sentence from your reading text.",
+        "slot_results": slot_results,
+    })
+
+
+@app.route("/lab/<int:text_id>/summary")
+def lab_summary(text_id):
+    """Session summary for an input text."""
+    token = get_user_token()
+    text = get_input_text(text_id, token)
+    if not text:
+        abort(404)
+
+    stats = get_input_text_stats(text_id, token)
+    mined = get_mined_words(token, text_id)
+
+    return render_template(
+        "input_lab_summary.html",
+        text_id=text_id,
+        text_title=text["title"],
+        stats=stats,
+        mined_words=mined,
+    )
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────────

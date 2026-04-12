@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Bridge Drill — Input Lab{% endblock %}
+
+{% block content %}
+<div class="exercise-container">
+    <div class="context-banner micro-curriculum-banner">
+        <span class="context-label">Bridge Drill &mdash; from your text</span>
+    </div>
+
+    <div class="exercise-header">
+        <span class="difficulty-badge">Lab</span>
+        <span class="clause-badge">Reconstruction</span>
+    </div>
+
+    <div class="instruction">
+        <p>Put all the words in the correct order to form the sentence.</p>
+        <p class="instruction-hint">This sentence is from your reading text.</p>
+    </div>
+
+    <div id="sentence-area" class="sentence-area"></div>
+
+    <div id="word-pool" class="word-pool">
+        <div class="word-pool-label">W&ouml;rter:</div>
+        <div id="word-tray" class="word-tray"></div>
+    </div>
+
+    <div class="action-bar">
+        <button id="btn-check" class="btn btn-primary" disabled>Pr&uuml;fen</button>
+        <button id="btn-reset" class="btn btn-secondary">Reset</button>
+    </div>
+
+    <div id="result-area" class="result-area hidden">
+        <div id="result-icon" class="result-icon"></div>
+        <div id="result-message" class="result-message"></div>
+        <div id="correct-sentence" class="correct-sentence"></div>
+        <div id="explanation-box" class="explanation-box"></div>
+        <div class="action-bar">
+            {% if has_more_drills %}
+            <a href="/lab/{{ text_id }}/drill" class="btn btn-primary">Next Drill</a>
+            {% endif %}
+            <a href="/lab/{{ text_id }}/summary" class="btn btn-secondary">Finish</a>
+        </div>
+    </div>
+</div>
+
+<script>
+    const EXERCISE_DATA = {{ exercise|safe }};
+    const LAB_DRILL = {{ drill_meta|safe }};
+</script>
+<script src="{{ url_for('static', filename='js/input_lab_drill.js') }}"></script>
+{% endblock %}

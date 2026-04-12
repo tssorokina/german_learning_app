@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Reading — Input Lab{% endblock %}
+
+{% block content %}
+<div class="lab-container">
+    <div class="exercise-header">
+        <span class="difficulty-badge">{{ text_title or 'Reading' }}</span>
+        <span class="lab-diff-badge lab-diff-{{ difficulty_band }}">{{ coverage_pct }}% known</span>
+    </div>
+
+    <div class="lab-progress">
+        <div id="progress-fill" class="lab-progress-fill"></div>
+    </div>
+
+    <div id="reader-area"></div>
+
+    <div class="lab-floating-bar" id="floating-bar" style="display:none;">
+        <a href="/lab/{{ text_id }}/mine" class="btn btn-primary">Mine Words</a>
+        <a href="/lab/{{ text_id }}/drill" class="btn btn-secondary">Bridge Drills</a>
+    </div>
+</div>
+
+<script>
+    const LAB_DATA = {{ text_data|safe }};
+</script>
+<script src="{{ url_for('static', filename='js/input_lab_read.js') }}"></script>
+{% endblock %}
