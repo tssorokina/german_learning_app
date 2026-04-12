@@ -196,6 +196,16 @@ def init_db():
             saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_token, text_id, word)
         );
+
+        CREATE TABLE IF NOT EXISTS word_exposures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT NOT NULL,
+            word TEXT NOT NULL,
+            times_seen INTEGER DEFAULT 0,
+            first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_token, word)
+        );
     """)
 
     # Add module and exercise_type columns to attempts if missing
@@ -1341,7 +1351,10 @@ def delete_input_text(text_id, user_token):
 
 
 def get_user_known_words(user_token):
-    """Build the set of words the user knows from saved_words + mined_words."""
+    """Build the set of words the user knows.
+
+    Sources: saved_words + mined_words + words seen ≥3 times across texts.
+    """
     conn = get_db()
     saved = conn.execute(
         "SELECT word FROM saved_words WHERE user_token = ?",
@@ -1351,11 +1364,17 @@ def get_user_known_words(user_token):
         "SELECT word FROM input_mined_words WHERE user_token = ?",
         (user_token,)
     ).fetchall()
+    familiar = conn.execute(
+        "SELECT word FROM word_exposures WHERE user_token = ? AND times_seen >= 3",
+        (user_token,)
+    ).fetchall()
     conn.close()
     known = set()
     for r in saved:
         known.add(r["word"].lower())
     for r in mined:
+        known.add(r["word"].lower())
+    for r in familiar:
         known.add(r["word"].lower())
     return known
 
@@ -1382,3 +1401,35 @@ def set_scaffold_level(user_token, level):
     )
     conn.commit()
     conn.close()
+
+
+# ─── WORD EXPOSURE TRACKING ──────────────────────────────────────────
+
+def record_word_exposures(user_token, words):
+    """Increment exposure count for each word in the list.
+
+    words: iterable of raw word strings (will be lowercased).
+    """
+    conn = get_db()
+    now = datetime.now().isoformat()
+    for w in set(w.lower() for w in words if w):
+        conn.execute(
+            """INSERT INTO word_exposures (user_token, word, times_seen, last_seen)
+               VALUES (?, ?, 1, ?)
+               ON CONFLICT(user_token, word) DO UPDATE
+               SET times_seen = times_seen + 1, last_seen = ?""",
+            (user_token, w, now, now)
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_familiar_words(user_token, min_exposures=3):
+    """Return set of words the user has seen at least `min_exposures` times."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT word FROM word_exposures WHERE user_token = ? AND times_seen >= ?",
+        (user_token, min_exposures)
+    ).fetchall()
+    conn.close()
+    return {r["word"] for r in rows}

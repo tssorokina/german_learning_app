@@ -47,7 +47,8 @@ from database import (init_db, get_or_create_user, get_retry_template,
                       mark_segment_drilled, mine_word_from_text,
                       get_mined_words, get_segments_for_drill,
                       get_input_text_stats, get_user_known_words,
-                      get_scaffold_level, set_scaffold_level)
+                      get_scaffold_level, set_scaffold_level,
+                      record_word_exposures)
 from sentences import (get_exercise_by_difficulty, prepare_exercise,
                        get_template_by_id, get_daily_sentence, SENTENCE_BANK,
                        count_by_difficulty, load_generated_verb_sentences)
@@ -1415,6 +1416,14 @@ def lab_submit():
         overall_score, total_words, unknown_count,
         translations=translations,
     )
+
+    # Record word exposures for difficulty tracking
+    from input_lab import _tokenize
+    all_words = []
+    for sent in sentences:
+        all_words.extend(_tokenize(sent))
+    record_word_exposures(token, all_words)
+
     return redirect(url_for("lab_read", text_id=text_id))
 
 
