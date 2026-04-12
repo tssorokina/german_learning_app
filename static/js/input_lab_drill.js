@@ -19,6 +19,12 @@
     var dragState = null;
 
     function init() {
+        // Show English translation for bridge drills (always visible)
+        var translationEl = document.getElementById("english-translation");
+        if (exercise.english && translationEl) {
+            translationEl.textContent = exercise.english;
+        }
+
         renderSentence();
         renderWords();
         btnCheck.addEventListener("click", checkAnswer);
@@ -28,9 +34,17 @@
     function renderSentence() {
         sentenceArea.innerHTML = "";
         slotElements = [];
+        var prefixes = exercise.slot_prefixes || [];
         for (var i = 0; i < exercise.num_slots; i++) {
             var wrapper = document.createElement("span");
             wrapper.className = "slot-wrapper";
+
+            if (prefixes[i]) {
+                var pre = document.createElement("span");
+                pre.className = "slot-punct slot-prefix";
+                pre.textContent = prefixes[i];
+                wrapper.appendChild(pre);
+            }
 
             var el = document.createElement("span");
             el.className = "slot";
@@ -86,6 +100,7 @@
 
     function placeWord(chip, slotEl) {
         slotEl.querySelector(".placed-word").textContent = chip.dataset.word;
+        slotEl.dataset.chipId = chip.dataset.chipIndex;
         slotEl.classList.add("filled");
         chip.classList.add("placed");
         updateCheckButton();
@@ -93,11 +108,15 @@
 
     function returnToTray(word, slotEl) {
         slotEl.querySelector(".placed-word").textContent = "";
+        var chipId = slotEl.dataset.chipId;
+        delete slotEl.dataset.chipId;
         slotEl.classList.remove("filled");
-        for (var i = 0; i < chipElements.length; i++) {
-            if (chipElements[i].dataset.word === word && chipElements[i].classList.contains("placed")) {
-                chipElements[i].classList.remove("placed");
-                break;
+        if (chipId != null) {
+            for (var i = 0; i < chipElements.length; i++) {
+                if (chipElements[i].dataset.chipIndex === chipId) {
+                    chipElements[i].classList.remove("placed");
+                    break;
+                }
             }
         }
         updateCheckButton();
@@ -167,6 +186,20 @@
                     s.classList.add(data.slot_results[i].is_correct ? "correct-slot" : "incorrect-slot");
                 }
             });
+        }
+
+        // Word-level feedback
+        if (data.word_feedback && !data.correct) {
+            var wf = data.word_feedback;
+            var fb = document.createElement("div");
+            fb.className = "error-detail-card word-feedback-card";
+            fb.innerHTML = '<div class="error-cat">' + wf.hint + '</div>';
+            explanationBox.parentNode.insertBefore(fb, explanationBox.nextSibling);
+
+            if (wf.first_wrong_index != null && slotElements[wf.first_wrong_index]) {
+                slotElements[wf.first_wrong_index].classList.add("flash-wrong");
+                slotElements[wf.first_wrong_index].scrollIntoView({ behavior: "smooth", block: "center" });
+            }
         }
 
         resultArea.scrollIntoView({ behavior: "smooth", block: "start" });

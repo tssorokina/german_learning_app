@@ -77,18 +77,34 @@ def prepare_exercise(template):
     words = text.split()
 
     # Build all_slots: every word is a slot
+    # Punctuation is split into prefix (leading) and suffix (trailing),
+    # both displayed as fixed text so the user only drags clean words.
+    _PUNCT = set('.,;:!?"\u201e\u201c\u201d\u201f\u00ab\u00bb\'()[]{}–—…')
     all_slots = []
     for i, w in enumerate(words):
-        clean = w.strip(".,;:!?\"'()[]{}–—")
+        # Extract leading punctuation (quotes, brackets, dashes)
+        prefix = ""
+        for ch in w:
+            if ch in _PUNCT:
+                prefix += ch
+            else:
+                break
+        # Extract trailing punctuation
         suffix = ""
         for ch in reversed(w):
-            if ch in ".,;:!?\"'()[]{}–—":
+            if ch in _PUNCT:
                 suffix = ch + suffix
             else:
                 break
+        clean = w[len(prefix):]
+        if suffix:
+            clean = clean[:-len(suffix)]
+        if not clean:
+            clean = w  # fallback: don't lose pure-punctuation tokens
         all_slots.append({
             "index": i,
             "correct_word": clean,
+            "prefix": prefix,
             "suffix": suffix,
             "is_verb": i in verb_positions
         })

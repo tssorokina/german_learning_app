@@ -5,8 +5,12 @@ Segments German text into sentences, scores difficulty against user's
 known vocabulary, and prepares bridge drills from content sentences.
 """
 
+import os
 import re
 import random
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Common German abbreviations that end with a period but are not sentence endings
 _ABBREVIATIONS = {
@@ -15,25 +19,137 @@ _ABBREVIATIONS = {
     "vgl.", "s.", "abs.", "max.", "min.", "usw.", "evtl.",
 }
 
-# Common German "stop words" that are always known — not counted as unknown
+# Common German words that are always treated as "known" for difficulty scoring.
+# Includes function words AND the ~400 most frequent German content words
+# (approx. frequency class ≤12 in Wortschatz Leipzig).
 _STOP_WORDS = {
+    # ── articles, pronouns, determiners ─────────────────────────────
     "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen",
     "einem", "einer", "und", "oder", "aber", "denn", "sondern", "nicht",
     "kein", "keine", "keinen", "keinem", "ich", "du", "er", "sie", "es",
     "wir", "ihr", "mich", "dich", "sich", "uns", "euch", "mir", "dir",
     "ihm", "ihr", "ihnen", "mein", "dein", "sein", "unser", "euer",
+    "dieser", "diese", "dieses", "diesen", "diesem", "jeder", "jede",
+    "jedes", "jeden", "jedem", "man", "etwas", "nichts",
+    "alle", "alles", "allem", "allen", "aller",
+    "welch", "welche", "welcher", "welches", "welchen", "welchem",
+    # ── prepositions ────────────────────────────────────────────────
     "in", "an", "auf", "zu", "von", "mit", "für", "über", "unter",
     "nach", "vor", "bei", "aus", "um", "durch", "gegen", "ohne",
-    "ist", "sind", "war", "hat", "haben", "wird", "werden", "kann",
-    "muss", "soll", "will", "darf", "mag", "möchte", "wurde", "worden",
+    "zwischen", "neben", "hinter", "außer", "trotz", "wegen", "statt",
+    "innerhalb", "außerhalb", "gegenüber", "laut", "gemäß", "anstatt",
+    # ── conjunctions & particles ────────────────────────────────────
     "dass", "weil", "wenn", "als", "ob", "obwohl", "damit", "bevor",
     "nachdem", "während", "seit", "bis", "da", "so", "wie", "wo",
-    "was", "wer", "wem", "wen", "welch", "welche", "welcher", "welches",
+    "doch", "mal", "ja", "nein", "also", "zwar", "jedoch", "dennoch",
+    "außerdem", "deshalb", "deswegen", "daher", "darum", "dabei",
+    "dazu", "davon", "dafür", "dagegen", "darauf", "darin", "darüber",
+    "darunter", "danach", "davor", "daran", "daraus", "damit",
+    # ── common verbs (all forms) ────────────────────────────────────
+    "ist", "sind", "war", "waren", "bin", "bist", "wäre", "wären",
+    "hat", "haben", "hatte", "hatten", "hätte", "hätten",
+    "wird", "werden", "wurde", "wurden", "würde", "würden", "worden",
+    "kann", "können", "konnte", "konnten", "könnte", "könnten",
+    "muss", "müssen", "musste", "mussten", "müsste", "müssten",
+    "soll", "sollen", "sollte", "sollten",
+    "will", "wollen", "wollte", "wollten",
+    "darf", "dürfen", "durfte", "durften", "dürfte", "dürften",
+    "mag", "mögen", "mochte", "möchte", "möchten",
+    "gibt", "geben", "gab", "gaben", "gegeben",
+    "geht", "gehen", "ging", "gegangen",
+    "kommt", "kommen", "kam", "kamen", "gekommen",
+    "macht", "machen", "machte", "gemacht",
+    "sagt", "sagen", "sagte", "gesagt",
+    "steht", "stehen", "stand", "gestanden",
+    "liegt", "liegen", "lag", "gelegen",
+    "sieht", "sehen", "sah", "gesehen",
+    "nimmt", "nehmen", "nahm", "genommen",
+    "findet", "finden", "fand", "gefunden",
+    "bringt", "bringen", "brachte", "gebracht",
+    "hält", "halten", "hielt", "gehalten",
+    "lässt", "lassen", "ließ", "gelassen",
+    "bleibt", "bleiben", "blieb", "geblieben",
+    "heißt", "heißen", "hieß",
+    "weiß", "wissen", "wusste", "gewusst",
+    "denkt", "denken", "dachte", "gedacht",
+    "glaubt", "glauben", "glaubte", "geglaubt",
+    "braucht", "brauchen", "brauchte", "gebraucht",
+    "zeigt", "zeigen", "zeigte", "gezeigt",
+    "spricht", "sprechen", "sprach", "gesprochen",
+    "führt", "führen", "führte", "geführt",
+    "trägt", "tragen", "trug", "getragen",
+    "fährt", "fahren", "fuhr", "gefahren",
+    "läuft", "laufen", "lief", "gelaufen",
+    "sitzt", "sitzen", "saß", "gesessen",
+    "spielt", "spielen", "spielte", "gespielt",
+    "arbeitet", "arbeiten", "arbeitete", "gearbeitet",
+    "lebt", "leben", "lebte", "gelebt",
+    "lernt", "lernen", "lernte", "gelernt",
+    "liest", "lesen", "las", "gelesen",
+    "schreibt", "schreiben", "schrieb", "geschrieben",
+    "beginnt", "beginnen", "begann", "begonnen",
+    "erklärt", "erklären", "erklärte", "erklärt",
+    "versucht", "versuchen", "versuchte", "versucht",
+    "stellt", "stellen", "stellte", "gestellt",
+    "setzt", "setzen", "setzte", "gesetzt",
+    "legt", "legen", "legte", "gelegt",
+    "folgt", "folgen", "folgte", "gefolgt",
+    # ── common adverbs ──────────────────────────────────────────────
     "auch", "noch", "schon", "nur", "sehr", "mehr", "viel", "gut",
-    "ja", "nein", "hier", "dort", "dann", "also", "doch", "mal",
-    "immer", "nie", "oft", "jetzt", "heute", "morgen", "gestern",
-    "alle", "alles", "dieser", "diese", "dieses", "jeder", "jede",
-    "man", "etwas", "nichts", "es", "gibt", "sein", "haben", "werden",
+    "hier", "dort", "dann", "immer", "nie", "oft", "jetzt", "heute",
+    "morgen", "gestern", "ganz", "wieder", "schon", "fast", "gerade",
+    "bereits", "etwa", "wirklich", "besonders", "eigentlich", "natürlich",
+    "vielleicht", "wahrscheinlich", "tatsächlich", "genau", "zusammen",
+    "allein", "sogar", "jedenfalls", "überhaupt", "zunächst", "zuerst",
+    "bisher", "bislang", "derzeit", "inzwischen", "mittlerweile",
+    "eher", "ziemlich", "recht", "kaum", "wenig", "lange", "kurz",
+    "früh", "spät", "schnell", "langsam", "häufig", "selten",
+    "oben", "unten", "vorne", "hinten", "rechts", "links",
+    "maximal", "mindestens", "ungefähr", "rund",
+    # ── common adjectives ───────────────────────────────────────────
+    "groß", "große", "großen", "großer", "großes", "größer", "größte",
+    "klein", "kleine", "kleinen", "kleiner", "kleines",
+    "neu", "neue", "neuen", "neuer", "neues",
+    "alt", "alte", "alten", "alter", "altes",
+    "lang", "lange", "langen", "langer", "langes", "länger", "längste",
+    "jung", "junge", "jungen", "junger", "junges",
+    "hoch", "hohe", "hohen", "hoher", "hohes", "höher", "höchste",
+    "erst", "erste", "ersten", "erster", "erstes",
+    "letzt", "letzte", "letzten", "letzter", "letztes",
+    "ander", "andere", "anderen", "anderer", "anderes",
+    "eigen", "eigene", "eigenen", "eigener", "eigenes",
+    "verschieden", "verschiedene", "verschiedenen",
+    "möglich", "wichtig", "richtig", "falsch", "schlecht", "schön",
+    "frei", "stark", "schwer", "leicht", "weit", "nah", "voll",
+    "gleich", "bestimmt", "einzig", "weiter", "weitere", "weiteren",
+    "öffentlich", "politisch", "sozial", "international", "deutsch",
+    "deutsche", "deutschen", "deutscher", "deutsches",
+    # ── common nouns (top frequency) ────────────────────────────────
+    "Jahr", "Jahre", "Jahren", "Jahres",
+    "Zeit", "Mal", "Teil", "Seite",
+    "Mensch", "Menschen", "Kind", "Kinder", "Kindern",
+    "Frau", "Frauen", "Mann", "Männer",
+    "Tag", "Tage", "Tagen", "Woche", "Wochen", "Monat", "Monate",
+    "Land", "Länder", "Stadt", "Städte", "Welt",
+    "Haus", "Häuser", "Schule", "Arbeit",
+    "Frage", "Fragen", "Antwort", "Antworten",
+    "Beispiel", "Fall", "Fälle", "Grund", "Gründe",
+    "Ende", "Anfang", "Leben",
+    "Geld", "Wasser", "Weg", "Platz",
+    "Hand", "Kopf", "Auge", "Augen",
+    "Wort", "Sprache", "Buch", "Bild",
+    "Thema", "Problem", "Probleme",
+    "Prozent", "Zahl", "Zahlen", "Stunde", "Stunden", "Minute",
+    "Eltern", "Familie", "Freund", "Freunde",
+    "Euro", "Dollar", "Milliarde", "Million", "Millionen",
+    "Regierung", "Staat", "Gesellschaft",
+    # ── common adjectival / misc ────────────────────────────────────
+    "viele", "vielen", "vieler", "wenige", "wenigen", "weniger",
+    "einige", "einigen", "einiger",
+    "beiden", "beide", "beider",
+    "solche", "solchen", "solcher", "solches",
+    "gar", "denn", "wohl", "eben", "bloß", "übrigens",
+    "zum", "zur", "vom", "beim", "ins", "im", "am",
 }
 
 
@@ -146,7 +262,73 @@ def difficulty_band(score):
         return "red"
 
 
-def prepare_bridge_drill(sentence_text, sentence_index=0, text_id=0):
+def translate_sentences(sentences):
+    """Translate German sentences to English.
+
+    Tries DeepL API first (if DEEPL_API_KEY is set), then falls back
+    to MyMemory free API.  Returns dict mapping German sentence → English.
+    """
+    if not sentences:
+        return {}
+
+    import requests
+
+    api_key = os.environ.get("DEEPL_API_KEY", "")
+
+    # ── Try DeepL first ───────────────────────────────────────────
+    if api_key:
+        translations = {}
+        batch_size = 50
+        for i in range(0, len(sentences), batch_size):
+            batch = sentences[i:i + batch_size]
+            try:
+                base_url = (
+                    "https://api-free.deepl.com" if api_key.endswith(":fx")
+                    else "https://api.deepl.com"
+                )
+                resp = requests.post(
+                    f"{base_url}/v2/translate",
+                    data={
+                        "auth_key": api_key,
+                        "text": batch,
+                        "source_lang": "DE",
+                        "target_lang": "EN",
+                    },
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    results = resp.json().get("translations", [])
+                    for sent, tr in zip(batch, results):
+                        translations[sent] = tr.get("text", "")
+                else:
+                    logger.warning(f"DeepL returned {resp.status_code}")
+            except Exception as e:
+                logger.warning(f"DeepL translation failed: {e}")
+        if translations:
+            return translations
+
+    # ── Fallback: MyMemory free API (1 sentence at a time) ────────
+    translations = {}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; GermanLearningApp/1.0)"}
+    for sent in sentences:
+        try:
+            resp = requests.get(
+                "https://api.mymemory.translated.net/get",
+                params={"q": sent, "langpair": "de|en"},
+                headers=headers,
+                timeout=8,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data.get("responseData", {}).get("translatedText", "")
+                if text and "MYMEMORY" not in text.upper():
+                    translations[sent] = text
+        except Exception:
+            pass
+    return translations
+
+
+def prepare_bridge_drill(sentence_text, sentence_index=0, text_id=0, english=""):
     """Convert a sentence into a reconstruction drill template.
 
     Returns a dict compatible with sentences.prepare_exercise().
@@ -161,5 +343,5 @@ def prepare_bridge_drill(sentence_text, sentence_index=0, text_id=0):
         "clause_type": "input_lab",
         "difficulty": 2,  # neutral
         "explanation": "Reconstruct the sentence from your reading text.",
-        "english": "",
+        "english": english,
     }
